@@ -15,6 +15,49 @@ Il modello HuggingFace `ds4sd/docling-layout-heron` estrae strutture di layout d
 
 > La conversione in FP16 è possibile ma l'esecuzione con ONNX Runtime può fallire a causa di operatori non supportati.
 
+## Modelli pronti all'uso
+I convertiti più recenti sono pubblicati come asset nella release
+[`models-2025-09-19`](https://github.com/mapo80/ds4sd-docling-layout-heron-onnx/releases/tag/models-2025-09-19).
+Gli artifact sono stati generati con:
+
+- `onnxruntime 1.22.1`
+- `onnxruntime-tools 1.7.0`
+- `torch 2.6.0`
+- `transformers 4.56.1`
+- `openvino 2025.3.0`
+
+### Contenuto della release
+
+| File | Dimensione (MB) | Descrizione |
+|:--|--:|:--|
+| `heron-converted.onnx` | 163.87 | Esportazione ONNX FP32 direttamente dal modello HuggingFace |
+| `heron-optimized.onnx` | 163.53 | ONNX FP32 con ottimizzazioni ORT (graph level `ORT_ENABLE_ALL`) |
+| `heron-optimized-fp16.onnx` | 82.05 | ONNX FP16 (conversione FP16 completa, conservando IO FP32) |
+| `heron-optimized.ort` | 163.95 | Formato ORT con ottimizzazioni “Fixed” per CPU |
+| `heron-optimized.with_runtime_opt.ort` | 163.95 | Formato ORT con ottimizzazioni “Runtime” |
+| `heron-converted.xml` | 1.44 | OpenVINO IR (XML) |
+| `heron-converted.bin` | 81.58 | OpenVINO IR weights |
+
+> Nota: ONNX Runtime non riesce a caricare la variante FP16 nel formato `.ort`
+per via di un mismatch di tipo sul nodo `/model/encoder/Cast_2`. Per l'uso con
+ORT rimangono quindi disponibili le sole varianti FP32.
+
+### Download rapido
+
+Scarica i file nella cartella `models/` con `curl` (o `wget`):
+
+```bash
+mkdir -p models
+curl -L -o models/heron-optimized.onnx \
+  https://github.com/mapo80/ds4sd-docling-layout-heron-onnx/releases/download/models-2025-09-19/heron-optimized.onnx
+curl -L -o models/heron-optimized.ort \
+  https://github.com/mapo80/ds4sd-docling-layout-heron-onnx/releases/download/models-2025-09-19/heron-optimized.ort
+```
+
+Sostituisci il nome del file per ottenere gli altri asset della 
+release. Dopo il download, gli script nella sezione successiva
+possono essere eseguiti direttamente senza ulteriore conversione.
+
 ## Performance
 Benchmark su CPU con input `640×640`, eseguiti in sequenza su due immagini del folder `dataset/` con `--threads-intra 0` e `--threads-inter 1`.
 
