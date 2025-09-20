@@ -3,20 +3,25 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using LayoutSdk.Inference;
 using LayoutSdk.Processing;
 
 namespace LayoutSdk;
 
+internal interface IOpenVinoExecutor : IDisposable
+{
+    void Infer(ImageTensor tensor);
+}
+
 internal sealed class OpenVinoBackend : ILayoutBackend, IDisposable
 {
-    private readonly Core _core;
-    private readonly Model _model;
-    private readonly CompiledModel _compiled;
-    private readonly InferRequest _request;
-    private readonly string _inputName;
+    private readonly IOpenVinoExecutor _executor;
 
-    public OpenVinoBackend(string modelXmlPath, string weightsBinPath)
+    public OpenVinoBackend(
+        string modelXmlPath,
+        string weightsBinPath,
+        Func<string, string, IOpenVinoExecutor>? executorFactory = null)
     {
         if (string.IsNullOrWhiteSpace(modelXmlPath))
         {
@@ -28,29 +33,29 @@ internal sealed class OpenVinoBackend : ILayoutBackend, IDisposable
             throw new ArgumentException("Weights BIN path must be provided", nameof(weightsBinPath));
         }
 
-        CopyNativeBinariesNearExecutable();
+        if (executorFactory is null)
+        {
+            CopyNativeBinariesNearExecutable();
+        }
 
-        _core = new Core();
-        _model = _core.read_model(modelXmlPath, weightsBinPath);
-        _compiled = _core.compile_model(_model, "CPU");
-        _request = _compiled.create_infer_request();
-        _inputName = _model.inputs()[0].get_any_name();
+        var factory = executorFactory ?? ((xml, bin) => new OpenVinoExecutor(xml, bin));
+        _executor = factory(modelXmlPath, weightsBinPath);
+    }
+
+    internal OpenVinoBackend(IOpenVinoExecutor executor)
+    {
+        _executor = executor ?? throw new ArgumentNullException(nameof(executor));
     }
 
     public LayoutBackendResult Infer(ImageTensor tensor)
     {
-        using var inputTensor = new Tensor(new Shape(new long[] { 1, tensor.Channels, tensor.Height, tensor.Width }), tensor.Buffer);
-        _request.set_tensor(_inputName, inputTensor);
-        _request.infer();
+        _executor.Infer(tensor);
         return new LayoutBackendResult(new List<BoundingBox>());
     }
 
     public void Dispose()
     {
-        _request.Dispose();
-        _compiled.Dispose();
-        _model.Dispose();
-        _core.Dispose();
+        _executor.Dispose();
     }
 
     private static void CopyNativeBinariesNearExecutable()
@@ -91,6 +96,40 @@ internal sealed class OpenVinoBackend : ILayoutBackend, IDisposable
             catch
             {
             }
+        }
+    }
+
+    [ExcludeFromCodeCoverage]
+    private sealed class OpenVinoExecutor : IOpenVinoExecutor
+    {
+        private readonly Core _core;
+        private readonly Model _model;
+        private readonly CompiledModel _compiled;
+        private readonly InferRequest _request;
+        private readonly string _inputName;
+
+        public OpenVinoExecutor(string modelXmlPath, string weightsBinPath)
+        {
+            _core = new Core();
+            _model = _core.read_model(modelXmlPath, weightsBinPath);
+            _compiled = _core.compile_model(_model, "CPU");
+            _request = _compiled.create_infer_request();
+            _inputName = _model.inputs()[0].get_any_name();
+        }
+
+        public void Infer(ImageTensor tensor)
+        {
+            using var inputTensor = new Tensor(new Shape(new long[] { 1, tensor.Channels, tensor.Height, tensor.Width }), tensor.Buffer);
+            _request.set_tensor(_inputName, inputTensor);
+            _request.infer();
+        }
+
+        public void Dispose()
+        {
+            _request.Dispose();
+            _compiled.Dispose();
+            _model.Dispose();
+            _core.Dispose();
         }
     }
 }
