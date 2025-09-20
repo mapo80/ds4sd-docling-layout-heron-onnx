@@ -28,19 +28,19 @@ public class LayoutBackendFactoryTests
     }
 
     [Fact]
-    public void Create_OnnxRuntime_ReturnsBackend()
+    public void Create_Onnx_ReturnsBackend()
     {
-        var options = new LayoutSdkOptions("onnx", new OpenVinoModelOptions("xml", "bin"));
+        var options = new LayoutSdkOptions("onnx", "ort", new OpenVinoModelOptions("xml", "bin"));
         var stub = new StubBackend();
         var factory = new LayoutBackendFactory(options, _ => stub);
-        var backend = factory.Create(LayoutRuntime.OnnxRuntime);
+        var backend = factory.Create(LayoutRuntime.Onnx);
         Assert.Same(stub, backend);
     }
 
     [Fact]
     public void Create_OpenVino_ReturnsBackend()
     {
-        var options = new LayoutSdkOptions("onnx", new OpenVinoModelOptions("xml", "bin"));
+        var options = new LayoutSdkOptions("onnx", "ort", new OpenVinoModelOptions("xml", "bin"));
         var stub = new StubBackend();
         var factory = new LayoutBackendFactory(options, onnxFactory: _ => stub, openVinoFactory: (_, _) => stub);
         var backend = factory.Create(LayoutRuntime.OpenVino);
@@ -48,9 +48,27 @@ public class LayoutBackendFactoryTests
     }
 
     [Fact]
+    public void Create_Ort_ReturnsBackend()
+    {
+        var options = new LayoutSdkOptions("onnx", "ort", new OpenVinoModelOptions("xml", "bin"));
+        var stub = new StubBackend();
+        var factory = new LayoutBackendFactory(options, ortFactory: _ => stub);
+        var backend = factory.Create(LayoutRuntime.Ort);
+        Assert.Same(stub, backend);
+    }
+
+    [Fact]
+    public void Create_OrtWithoutPath_Throws()
+    {
+        var options = new LayoutSdkOptions("onnx", null, new OpenVinoModelOptions("xml", "bin"));
+        var factory = new LayoutBackendFactory(options);
+        Assert.Throws<InvalidOperationException>(() => factory.Create(LayoutRuntime.Ort));
+    }
+
+    [Fact]
     public void Create_InvalidRuntime_Throws()
     {
-        var options = new LayoutSdkOptions("onnx", new OpenVinoModelOptions("xml", "bin"));
+        var options = new LayoutSdkOptions("onnx", "ort", new OpenVinoModelOptions("xml", "bin"));
         var factory = new LayoutBackendFactory(options);
         Assert.Throws<System.ArgumentOutOfRangeException>(() => factory.Create((LayoutRuntime)999));
     }

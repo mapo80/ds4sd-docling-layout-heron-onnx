@@ -7,6 +7,7 @@ public sealed class LayoutSdkOptions
 {
     public LayoutSdkOptions(
         string onnxModelPath,
+        string? ortModelPath,
         OpenVinoModelOptions openVino,
         DocumentLanguage defaultLanguage = DocumentLanguage.English,
         bool validateModelPaths = false)
@@ -17,12 +18,15 @@ public sealed class LayoutSdkOptions
         }
 
         OnnxModelPath = onnxModelPath;
+        OrtModelPath = ortModelPath;
         OpenVino = openVino ?? throw new ArgumentNullException(nameof(openVino));
         DefaultLanguage = defaultLanguage;
         ValidateModelPaths = validateModelPaths;
     }
 
     public string OnnxModelPath { get; }
+
+    public string? OrtModelPath { get; }
 
     public OpenVinoModelOptions OpenVino { get; }
 
@@ -38,6 +42,10 @@ public sealed class LayoutSdkOptions
         }
 
         ValidatePath(OnnxModelPath, nameof(OnnxModelPath));
+        if (!string.IsNullOrWhiteSpace(OrtModelPath))
+        {
+            ValidatePath(OrtModelPath, nameof(OrtModelPath));
+        }
         OpenVino.EnsureFilesExist();
     }
 

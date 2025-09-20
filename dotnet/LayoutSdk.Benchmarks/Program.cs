@@ -133,13 +133,23 @@ static BenchmarkArtifacts RunBenchmark(
 
     object modelInfo = runtime switch
     {
-        LayoutRuntime.OnnxRuntime => new
+        LayoutRuntime.Onnx => new
         {
-            runtime = "onnxruntime",
+            runtime = "onnx",
             model_path = options.OnnxModelPath,
             model_size_bytes = File.Exists(options.OnnxModelPath) ? new FileInfo(options.OnnxModelPath).Length : 0L,
             device = "CPU",
             precision = options.OnnxModelPath.ToLowerInvariant().Contains("fp16") ? "fp16" : "fp32"
+        },
+        LayoutRuntime.Ort => new
+        {
+            runtime = "ort",
+            model_path = options.OrtModelPath,
+            model_size_bytes = !string.IsNullOrWhiteSpace(options.OrtModelPath) && File.Exists(options.OrtModelPath)
+                ? new FileInfo(options.OrtModelPath).Length
+                : 0L,
+            device = "CPU",
+            precision = options.OrtModelPath?.ToLowerInvariant().Contains("fp16") == true ? "fp16" : "fp32"
         },
         LayoutRuntime.OpenVino => new
         {
@@ -201,7 +211,7 @@ var compare = parameters.ContainsKey("--compare");
 LayoutRuntime[] runtimes;
 if (compare)
 {
-    runtimes = new[] { LayoutRuntime.OnnxRuntime, LayoutRuntime.OpenVino };
+    runtimes = new[] { LayoutRuntime.Onnx, LayoutRuntime.OpenVino };
 }
 else if (parameters.TryGetValue("--runtime", out var runtimeValue))
 {
@@ -238,6 +248,7 @@ if (compare && images.Count > 2)
 }
 
 var onnxModelPath = parameters.GetValueOrDefault("--onnx-model", "models/heron-optimized.onnx");
+var ortModelPath = parameters.GetValueOrDefault("--ort-model", "models/heron-optimized.with_runtime_opt.ort");
 var openVinoXml = parameters.GetValueOrDefault("--openvino-xml", "models/ov-ir/heron-optimized.xml");
 parameters.TryGetValue("--openvino-bin", out var openVinoBin);
 var openVinoOptions = string.IsNullOrWhiteSpace(openVinoBin)
@@ -246,6 +257,7 @@ var openVinoOptions = string.IsNullOrWhiteSpace(openVinoBin)
 
 var options = new LayoutSdkOptions(
     onnxModelPath,
+    ortModelPath,
     openVinoOptions,
     defaultLanguage: DocumentLanguage.English,
     validateModelPaths: parameters.ContainsKey("--validate-models"));

@@ -1,5 +1,4 @@
 using System;
-using System.Buffers;
 
 namespace LayoutSdk.Processing;
 
@@ -43,8 +42,7 @@ public sealed class ImageTensor : IDisposable
         }
 
         var required = checked(width * height * channels);
-        var buffer = ArrayPool<float>.Shared.Rent(required);
-        Array.Clear(buffer, 0, required);
+        var buffer = new float[required];
         return new ImageTensor(buffer, width, height, channels);
     }
 
@@ -59,7 +57,6 @@ public sealed class ImageTensor : IDisposable
             return;
         }
 
-        ArrayPool<float>.Shared.Return(_buffer);
         _disposed = true;
     }
 }
