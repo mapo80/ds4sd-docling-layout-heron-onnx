@@ -2,7 +2,11 @@ namespace LayoutSdk;
 
 public enum LayoutRuntime
 {
-    OnnxRuntime,
-    OpenVino
+    Onnx,
+    Ort,
+    OpenVino,
+
+    [System.Obsolete("Use Onnx instead.")]
+    OnnxRuntime = Onnx
 }
 

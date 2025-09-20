@@ -62,6 +62,86 @@ Sostituisci il nome del file per ottenere gli altri asset della
 release. Dopo il download, gli script nella sezione successiva
 possono essere eseguiti direttamente senza ulteriore conversione.
 
+## Pacchetto NuGet `Docling.LayoutSdk`
+
+È disponibile un pacchetto NuGet che contiene la libreria .NET (`LayoutSdk`) e **tutti** i modelli distribuiti nella release `models-2025-09-19`. Il pacchetto (`Docling.LayoutSdk.1.0.2.nupkg`, ~750 MB) è stato allegato alla stessa release su GitHub e può essere scaricato direttamente da:
+
+<https://github.com/mapo80/ds4sd-docling-layout-heron-onnx/releases/download/models-2025-09-19/Docling.LayoutSdk.1.0.2.nupkg>
+
+### Contenuto del pacchetto
+
+All'interno del pacchetto sono inclusi i seguenti asset, copiati nella cartella `models/` (con sottocartella `ov-ir/` per il formato OpenVINO) durante il `restore` del progetto che fa riferimento alla libreria:
+
+- `heron-converted.onnx`
+- `heron-optimized.onnx`
+- `heron-optimized-fp16.onnx`
+- `heron-optimized.ort`
+- `heron-optimized.with_runtime_opt.ort`
+- `ov-ir/heron-converted.xml`
+- `ov-ir/heron-converted.bin`
+
+La libreria espone inoltre la classe di supporto `LayoutSdkBundledModels` che consente di risolvere i percorsi di questi file e creare rapidamente delle `LayoutSdkOptions` già pronte all'uso. La scelta del backend avviene passando il valore dell'enum `LayoutRuntime` (`Onnx`, `Ort` oppure `OpenVino`) al metodo `Process`, senza dover indicare manualmente il percorso del modello per ogni formato.
+
+```csharp
+using LayoutSdk.Configuration;
+
+var options = LayoutSdkBundledModels.CreateOptions(validateModelPaths: true);
+options.EnsureModelPaths();
+
+Console.WriteLine(LayoutSdkBundledModels.GetOptimizedOnnxPath());
+Console.WriteLine(LayoutSdkBundledModels.GetOpenVinoXmlPath());
+
+using var sdk = new LayoutSdk.LayoutSdk(options);
+var resultOnnx = sdk.Process("input.png", overlay: false, LayoutSdk.LayoutRuntime.Onnx);
+var resultOrt = sdk.Process("input.png", overlay: false, LayoutSdk.LayoutRuntime.Ort);
+var resultOpenVino = sdk.Process("input.png", overlay: false, LayoutSdk.LayoutRuntime.OpenVino);
+```
+
+> Il parametro opzionale `useRuntimeOptimizedOrt` di `CreateOptions` permette di scegliere la variante `.ort` da utilizzare (predefinita: `heron-optimized.with_runtime_opt.ort`). Impostandolo a `false` viene selezionato `heron-optimized.ort`.
+
+### Come rigenerare il pacchetto
+
+1. Scaricare gli asset della release nella cartella `dotnet/LayoutSdk/PackagedModels/models/` mantenendo la stessa struttura (`ov-ir/` incluso).
+2. Eseguire il comando di packaging in Release:
+   ```bash
+   dotnet pack dotnet/LayoutSdk/LayoutSdk.csproj -c Release
+   ```
+   L'output viene salvato nella cartella `artifacts/`.
+3. (Opzionale) Pubblicare il pacchetto sulla release GitHub esistente:
+   ```bash
+   export GITHUB_TOKEN=... # usare un token personale con permessi "repo"
+   release_id=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+     -H "Accept: application/vnd.github+json" \
+     https://api.github.com/repos/mapo80/ds4sd-docling-layout-heron-onnx/releases/tags/models-2025-09-19 | jq '.id')
+   curl -H "Authorization: Bearer $GITHUB_TOKEN" \
+     -H "Content-Type: application/octet-stream" \
+     --data-binary @artifacts/Docling.LayoutSdk.1.0.2.nupkg \
+     "https://uploads.github.com/repos/mapo80/ds4sd-docling-layout-heron-onnx/releases/$release_id/assets?name=Docling.LayoutSdk.1.0.2.nupkg"
+   ```
+
+> **Nota:** non includere il token nel repository. In locale è sufficiente esportarlo nel proprio ambiente prima di eseguire i comandi `curl`.
+
+### Progetto di esempio `LayoutSdk.PackageDemo`
+
+La soluzione contiene il progetto console `dotnet/LayoutSdk.PackageDemo`, configurato per utilizzare esclusivamente il pacchetto NuGet (`Docling.LayoutSdk`). Il progetto usa la classe `LayoutSdkBundledModels` per:
+
+- verificare che tutti i file inclusi nel pacchetto siano presenti;
+- creare le `LayoutSdkOptions` predefinite;
+- eseguire un'inferenza con il backend ONNX (o con la variante ORT) su un'immagine `640×640` generata (oppure, se disponibile, sulla pagina `dataset/gazette_de_france.jpg` ridimensionata automaticamente).
+
+Per eseguire l'esempio senza scaricare manualmente i modelli è sufficiente:
+
+```bash
+# 1. Copiare il pacchetto nella cartella "packages" del repository
+cp Docling.LayoutSdk.1.0.2.nupkg packages/
+
+# 2. Ripristinare ed eseguire il progetto console
+dotnet restore dotnet/LayoutSdk.PackageDemo/LayoutSdk.PackageDemo.csproj
+dotnet run --project dotnet/LayoutSdk.PackageDemo/LayoutSdk.PackageDemo.csproj -c Release
+```
+
+La configurazione `nuget.config` già inclusa nel progetto aggiunge automaticamente la cartella locale `packages/` come feed, per cui non è necessario registrare sorgenti aggiuntive. L'output della console conferma che i file del modello vengono trovati direttamente dal pacchetto e riporta le tempistiche dell'inferenza.
+
 ## Performance
 Benchmark su CPU con input `640×640`, eseguiti in sequenza su due immagini del folder `dataset/` con `--threads-intra 0` e `--threads-inter 1`.
 
@@ -177,7 +257,7 @@ result.OverlayImage?.Encode(SKEncodedImageFormat.Png, 90)
 
 ### Costanti, runtime e lingue supportate
 - Le costanti grafiche (colore e spessore dell'overlay, messaggi di errore) sono definite nel file `LayoutDefaults.cs` per garantirne la riusabilità e l'allineamento tra backend.
-- I runtime di inferenza disponibili sono esposti dall'enum `LayoutRuntime` (`OnnxRuntime`, `OpenVino`), così da selezionare esplicitamente ONNX Runtime oppure il formato nativo OpenVINO IR.
+- I runtime di inferenza disponibili sono esposti dall'enum `LayoutRuntime` (`Onnx`, `Ort`, `OpenVino`), così da selezionare esplicitamente il modello ONNX, il formato serializzato `.ort` oppure il formato nativo OpenVINO IR.
 - Le lingue disponibili sono esposte dall'enum `DocumentLanguage` (`English`, `French`, `German`, `Italian`, `Spanish`), in modo da poter configurare con chiarezza scenari multilingua.
 
 ### Personalizzazione enterprise
@@ -199,7 +279,11 @@ L'applicazione console `LayoutSdk.Benchmarks` replica lo script Python generando
 
 ```bash
 dotnet run --project dotnet/LayoutSdk.Benchmarks/LayoutSdk.Benchmarks.csproj -- \
-  --runtime OnnxRuntime --variant-name dotnet-onnx-fp32-cpu \
+  --runtime Onnx --variant-name dotnet-onnx-fp32-cpu \
+  --images dataset --target-h 640 --target-w 640
+
+dotnet run --project dotnet/LayoutSdk.Benchmarks/LayoutSdk.Benchmarks.csproj -- \
+  --runtime Ort --variant-name dotnet-ort-fp32-cpu \
   --images dataset --target-h 640 --target-w 640
 
 dotnet run --project dotnet/LayoutSdk.Benchmarks/LayoutSdk.Benchmarks.csproj -- \
