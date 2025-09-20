@@ -47,14 +47,18 @@ ORT rimangono quindi disponibili le sole varianti FP32.
 Scarica i file nella cartella `models/` con `curl` (o `wget`):
 
 ```bash
-mkdir -p models
+mkdir -p models models/ov-ir
 curl -L -o models/heron-optimized.onnx \
   https://github.com/mapo80/ds4sd-docling-layout-heron-onnx/releases/download/models-2025-09-19/heron-optimized.onnx
 curl -L -o models/heron-optimized.ort \
   https://github.com/mapo80/ds4sd-docling-layout-heron-onnx/releases/download/models-2025-09-19/heron-optimized.ort
+curl -L -o models/ov-ir/heron-optimized.xml \
+  https://github.com/mapo80/ds4sd-docling-layout-heron-onnx/releases/download/models-2025-09-19/heron-optimized.xml
+curl -L -o models/ov-ir/heron-optimized.bin \
+  https://github.com/mapo80/ds4sd-docling-layout-heron-onnx/releases/download/models-2025-09-19/heron-optimized.bin
 ```
 
-Sostituisci il nome del file per ottenere gli altri asset della 
+Sostituisci il nome del file per ottenere gli altri asset della
 release. Dopo il download, gli script nella sezione successiva
 possono essere eseguiti direttamente senza ulteriore conversione.
 
@@ -140,36 +144,71 @@ pip install -r requirements.txt
 I file di modello di grandi dimensioni sono salvati nella cartella `models/` e sono esclusi dal versionamento git.
 
 ## SDK .NET 8
-La libreria `LayoutSdk` espone un'unica API per eseguire il detector tramite i tre runtime supportati:
-- **ONNX Runtime** (file `.onnx`)
-- **ONNX Runtime** con grafi ottimizzati in formato `.ort`
-- **OpenVINO CSharp API** (modelli IR `.xml`/`.bin`)
+La libreria `LayoutSdk` è stata rifattorizzata con un'architettura modulare e professionale, organizzata in spazi dei nomi indipendenti:
+
+- **Configuration** – `LayoutSdkOptions` centralizza i percorsi dei modelli (ONNX e `OpenVinoModelOptions` per la coppia `xml/bin`) e la lingua predefinita del documento tramite l'enum `DocumentLanguage`. Le opzioni possono verificare a runtime l'esistenza dei modelli (`ValidateModelPaths`).
+- **Factories** – `ILayoutBackendFactory` e `LayoutBackendFactory` incapsulano la creazione dei backend per i diversi motori (ONNX Runtime e OpenVINO), favorendo l'iniezione di dipendenze e la personalizzazione enterprise.
+- **Processing** – `IImagePreprocessor`, `SkiaImagePreprocessor`, `ImageTensor` e `LayoutPipeline` separano il preprocessing dei pixel, l'esecuzione del backend e la gestione del ciclo di vita delle risorse (`ArrayPool<float>` per ridurre le allocazioni).
+- **Metrics** – `LayoutExecutionMetrics` espone la durata di preprocessing, inferenza e disegno overlay, fornendo un driver affidabile per benchmark e telemetria senza dover misurare manualmente i tempi con `Stopwatch`.
+- **Rendering** – `IImageOverlayRenderer` e `ImageOverlayRenderer` generano l'overlay grafico applicando le costanti definite in `LayoutDefaults`.
+
+Questo design consente di estendere facilmente la libreria (ad esempio aggiungendo un nuovo backend o una pipeline GPU) e rende la base di codice pronta per scenari enterprise (telemetria, osservabilità, riuso delle risorse).
 
 ### Utilizzo
 ```csharp
 using LayoutSdk;
-var sdk = new LayoutSdk(new LayoutSdkOptions(
-    "models/heron-optimized.onnx",
-    "models/heron-optimized.ort",
-    "models/ov-ir/heron-optimized.xml"));
-var result = sdk.Process("dataset/gazette_de_france.jpg", overlay: true, LayoutEngine.Openvino);
-Console.WriteLine($"Detected: {result.Boxes.Count} elements");
+using LayoutSdk.Configuration;
+
+var options = new LayoutSdkOptions(
+    onnxModelPath: "models/heron-optimized.onnx",
+    openVino: new OpenVinoModelOptions(
+        modelXmlPath: "models/ov-ir/heron-optimized.xml",
+        weightsBinPath: "models/ov-ir/heron-optimized.bin"),
+    defaultLanguage: DocumentLanguage.English,
+    validateModelPaths: true);
+
+using var sdk = new LayoutSdk(options);
+var result = sdk.Process("dataset/gazette_de_france.jpg", overlay: true, LayoutRuntime.OpenVino);
+Console.WriteLine($"Detected: {result.Boxes.Count} elements in {result.Language}");
+Console.WriteLine($"Latency (ms): {result.Metrics.TotalDuration.TotalMilliseconds:F2}");
 result.OverlayImage?.Encode(SKEncodedImageFormat.Png, 90)
     .SaveTo(File.OpenWrite("overlay.png"));
 ```
-I pacchetti NuGet utilizzati sono le versioni più recenti di `Microsoft.ML.OnnxRuntime`, `OpenVINO.CSharp.API`, `OpenVINO.runtime.ubuntu.24-x86_64` e `SkiaSharp`.
-I test xUnit nella cartella `dotnet/LayoutSdk.Tests` verificano la gestione degli errori e la generazione opzionale degli overlay.
+
+### Costanti, runtime e lingue supportate
+- Le costanti grafiche (colore e spessore dell'overlay, messaggi di errore) sono definite nel file `LayoutDefaults.cs` per garantirne la riusabilità e l'allineamento tra backend.
+- I runtime di inferenza disponibili sono esposti dall'enum `LayoutRuntime` (`OnnxRuntime`, `OpenVino`), così da selezionare esplicitamente ONNX Runtime oppure il formato nativo OpenVINO IR.
+- Le lingue disponibili sono esposte dall'enum `DocumentLanguage` (`English`, `French`, `German`, `Italian`, `Spanish`), in modo da poter configurare con chiarezza scenari multilingua.
+
+### Personalizzazione enterprise
+- **Preprocessing personalizzato** – È possibile iniettare un'implementazione di `IImagePreprocessor` per supportare pipeline hardware accelerate (GPU, FPGA) mantenendo invariata la logica di orchestrazione.
+- **Backend specializzati** – Implementando `ILayoutBackend` è possibile collegare motori di inferenza aggiuntivi (TensorRT, DirectML, ecc.) riusando la pipeline e la raccolta di metriche.
+- **Metriche centralizzate** – I dati di `LayoutExecutionMetrics` possono essere esportati verso sistemi di telemetria (Application Insights, OpenTelemetry) fornendo visibilità end-to-end sulla latenza.
+
+### Test automatici
+La soluzione include test di unità in `LayoutSdk.Tests`, eseguibili con:
+
+```bash
+dotnet test dotnet/LayoutSdk.Tests/LayoutSdk.Tests.csproj
+```
+
+I test coprono i casi d'errore della pipeline di elaborazione immagini, la generazione dell'overlay, la propagazione della lingua e la validazione dei percorsi modello. I pacchetti NuGet utilizzati sono allineati alle ultime versioni stabili disponibili (`Microsoft.ML.OnnxRuntime 1.22.1`, `OpenVINO.CSharp.API 2025.1.0.2`, `OpenVINO.runtime.ubuntu.24-x86_64 2024.4.0.1`, `SkiaSharp 3.119.0`).
 
 ### Benchmark .NET
 L'applicazione console `LayoutSdk.Benchmarks` replica lo script Python generando le stesse cartelle di output:
 
 ```bash
 dotnet run --project dotnet/LayoutSdk.Benchmarks/LayoutSdk.Benchmarks.csproj -- \
-  --engine Onnx --variant-name dotnet-onnx-fp32-cpu \
+  --runtime OnnxRuntime --variant-name dotnet-onnx-fp32-cpu \
   --images dataset --target-h 640 --target-w 640
 
 dotnet run --project dotnet/LayoutSdk.Benchmarks/LayoutSdk.Benchmarks.csproj -- \
-  --engine Ort --variant-name dotnet-onnx-fp32-ort \
+  --runtime OpenVino --variant-name dotnet-openvino-fp32-cpu \
+  --images dataset --target-h 640 --target-w 640
+
+# confronto automatico su due pagine del dataset
+dotnet run --project dotnet/LayoutSdk.Benchmarks/LayoutSdk.Benchmarks.csproj -- \
+  --compare --variant-name dotnet-runtime-comparison \
   --images dataset --target-h 640 --target-w 640
 ```
-I risultati vengono salvati in `results/<variant>/run-YYYYMMDD-HHMMSS/` con gli stessi file `summary.json`, `model_info.json` e relativi manifest.
+I risultati vengono salvati in `results/<variant>/run-YYYYMMDD-HHMMSS/` con gli stessi file `summary.json`, `model_info.json` e relativi manifest. In modalità `--compare` viene inoltre generato `comparison.json` con la sintesi affiancata delle metriche per ONNX Runtime e OpenVINO sfruttando le prime due immagini disponibili nella cartella `dataset/`.

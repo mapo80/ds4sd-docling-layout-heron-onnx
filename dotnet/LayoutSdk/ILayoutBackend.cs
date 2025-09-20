@@ -1,9 +1,9 @@
-using SkiaSharp;
-using System.Collections.Generic;
+using LayoutSdk.Inference;
+using LayoutSdk.Processing;
 
 namespace LayoutSdk;
 
-internal interface ILayoutBackend
+public interface ILayoutBackend
 {
-    IReadOnlyList<BoundingBox> Infer(SKBitmap image);
+    LayoutBackendResult Infer(ImageTensor tensor);
 }

@@ -1,3 +1,5 @@
+using LayoutSdk.Configuration;
+using LayoutSdk.Metrics;
 using SkiaSharp;
 using System.Collections.Generic;
 
@@ -7,12 +9,23 @@ public record BoundingBox(float X, float Y, float Width, float Height, string La
 
 public class LayoutResult
 {
-    public IReadOnlyList<BoundingBox> Boxes { get; }
-    public SKBitmap? OverlayImage { get; }
-
-    public LayoutResult(IReadOnlyList<BoundingBox> boxes, SKBitmap? overlay)
+    public LayoutResult(
+        IReadOnlyList<BoundingBox> boxes,
+        SKBitmap? overlay,
+        DocumentLanguage language,
+        LayoutExecutionMetrics metrics)
     {
         Boxes = boxes;
         OverlayImage = overlay;
+        Language = language;
+        Metrics = metrics;
     }
+
+    public IReadOnlyList<BoundingBox> Boxes { get; }
+
+    public SKBitmap? OverlayImage { get; }
+
+    public DocumentLanguage Language { get; }
+
+    public LayoutExecutionMetrics Metrics { get; }
 }
