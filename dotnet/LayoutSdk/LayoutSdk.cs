@@ -1,59 +1,82 @@
+using LayoutSdk.Configuration;
+using LayoutSdk.Factories;
+using LayoutSdk.Metrics;
+using LayoutSdk.Processing;
+using LayoutSdk.Rendering;
 using SkiaSharp;
+using System;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.IO;
-using System.Collections.Generic;
 
 namespace LayoutSdk;
 
-public class LayoutSdk : IDisposable
+public sealed class LayoutSdk : IDisposable
 {
-    internal readonly ConcurrentDictionary<LayoutEngine, ILayoutBackend> Backends = new();
+    private readonly ConcurrentDictionary<LayoutRuntime, LayoutPipeline> _pipelines = new();
     private readonly LayoutSdkOptions _options;
+    private readonly ILayoutBackendFactory _backendFactory;
+    private readonly IImageOverlayRenderer _overlayRenderer;
+    private readonly IImagePreprocessor _preprocessor;
 
-    public LayoutSdk(LayoutSdkOptions options)
+    public LayoutSdk(
+        LayoutSdkOptions options,
+        ILayoutBackendFactory? backendFactory = null,
+        IImageOverlayRenderer? overlayRenderer = null,
+        IImagePreprocessor? preprocessor = null)
     {
-        _options = options;
+        _options = options ?? throw new ArgumentNullException(nameof(options));
+        _backendFactory = backendFactory ?? new LayoutBackendFactory(_options);
+        _overlayRenderer = overlayRenderer ?? new ImageOverlayRenderer();
+        _preprocessor = preprocessor ?? new SkiaImagePreprocessor();
     }
 
-    public LayoutResult Process(string imagePath, bool overlay, LayoutEngine engine)
+    public LayoutResult Process(string imagePath, bool overlay, LayoutRuntime runtime)
+    {
+        ValidateImagePath(imagePath);
+
+        using var bitmap = SKBitmap.Decode(imagePath)
+                           ?? throw new InvalidOperationException(LayoutDefaults.ImageDecodeFailureMessage);
+
+        var pipeline = _pipelines.GetOrAdd(runtime, r => new LayoutPipeline(_backendFactory.Create(r), _preprocessor));
+        var pipelineResult = pipeline.Execute(bitmap);
+
+        var overlayDuration = TimeSpan.Zero;
+        SKBitmap? overlayImage = null;
+        if (overlay)
+        {
+            var overlayWatch = Stopwatch.StartNew();
+            overlayImage = _overlayRenderer.CreateOverlay(bitmap, pipelineResult.Boxes);
+            overlayWatch.Stop();
+            overlayDuration = overlayWatch.Elapsed;
+        }
+
+        var metrics = new LayoutExecutionMetrics(
+            pipelineResult.Metrics.PreprocessDuration,
+            pipelineResult.Metrics.InferenceDuration,
+            overlayDuration);
+
+        return new LayoutResult(pipelineResult.Boxes, overlayImage, _options.DefaultLanguage, metrics);
+    }
+
+    private static void ValidateImagePath(string imagePath)
     {
         if (string.IsNullOrWhiteSpace(imagePath))
-            throw new ArgumentException("Image path is empty", nameof(imagePath));
+        {
+            throw new ArgumentException(LayoutDefaults.EmptyImagePathMessage, nameof(imagePath));
+        }
+
         if (!File.Exists(imagePath))
-            throw new FileNotFoundException("Image not found", imagePath);
-
-        using var bitmap = SKBitmap.Decode(imagePath) ?? throw new InvalidOperationException("Unable to decode image");
-        var backend = Backends.GetOrAdd(engine, CreateBackend);
-        var boxes = backend.Infer(bitmap);
-        SKBitmap? overlayImg = null;
-        if (overlay)
-            overlayImg = DrawOverlay(bitmap, boxes);
-        return new LayoutResult(boxes, overlayImg);
-    }
-
-    private ILayoutBackend CreateBackend(LayoutEngine engine) => engine switch
-    {
-        LayoutEngine.Onnx => new OnnxRuntimeBackend(_options.OnnxModelPath),
-        LayoutEngine.Ort => new OnnxRuntimeBackend(_options.OrtModelPath),
-        LayoutEngine.Openvino => new OpenVinoBackend(_options.OpenVinoModelPath),
-        _ => throw new ArgumentOutOfRangeException(nameof(engine), engine, null)
-    };
-
-    private static SKBitmap DrawOverlay(SKBitmap baseImage, IReadOnlyList<BoundingBox> boxes)
-    {
-        var copy = baseImage.Copy();
-        using var canvas = new SKCanvas(copy);
-        using var paint = new SKPaint { Color = SKColors.Lime, IsStroke = true, StrokeWidth = 2 };
-        foreach (var b in boxes)
-            canvas.DrawRect(b.X, b.Y, b.Width, b.Height, paint);
-        return copy;
+        {
+            throw new FileNotFoundException(LayoutDefaults.ImageNotFoundMessage, imagePath);
+        }
     }
 
     public void Dispose()
     {
-        foreach (var backend in Backends.Values)
-            if (backend is IDisposable d) d.Dispose();
+        foreach (var pipeline in _pipelines.Values)
+        {
+            pipeline.Dispose();
+        }
     }
 }
-
-public record LayoutSdkOptions(string OnnxModelPath, string OrtModelPath, string OpenVinoModelPath);
