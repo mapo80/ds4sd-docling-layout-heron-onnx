@@ -25,6 +25,33 @@ file class FakeBackendFactory : ILayoutBackendFactory
     public ILayoutBackend Create(LayoutRuntime runtime) => _backend;
 }
 
+file sealed class DisposableBackend : ILayoutBackend, IDisposable
+{
+    public bool Disposed { get; private set; }
+
+    public LayoutBackendResult Infer(ImageTensor tensor) =>
+        new(new List<BoundingBox>());
+
+    public void Dispose() => Disposed = true;
+}
+
+file sealed class CountingBackendFactory : ILayoutBackendFactory
+{
+    private readonly Func<LayoutRuntime, ILayoutBackend> _factory;
+    public int Created { get; private set; }
+
+    public CountingBackendFactory(Func<LayoutRuntime, ILayoutBackend> factory)
+    {
+        _factory = factory;
+    }
+
+    public ILayoutBackend Create(LayoutRuntime runtime)
+    {
+        Created++;
+        return _factory(runtime);
+    }
+}
+
 public class LayoutSdkTests
 {
     private static LayoutSdk CreateSdkWithFakeBackend()
@@ -74,6 +101,45 @@ public class LayoutSdkTests
         var result = sdk.Process(SampleImage, false, LayoutRuntime.OnnxRuntime);
         Assert.Null(result.OverlayImage);
         Assert.Equal(TimeSpan.Zero, result.Metrics.OverlayDuration);
+    }
+
+    [Fact]
+    public void Process_ReusesPipelinePerRuntime()
+    {
+        var backend = new DisposableBackend();
+        var factory = new CountingBackendFactory(_ => backend);
+        var options = new LayoutSdkOptions(
+            "onnx",
+            new OpenVinoModelOptions("xml", "bin"));
+        var sdk = new LayoutSdk(options, factory);
+
+        try
+        {
+            var path = SampleImage;
+            sdk.Process(path, false, LayoutRuntime.OnnxRuntime);
+            sdk.Process(path, false, LayoutRuntime.OnnxRuntime);
+            Assert.Equal(1, factory.Created);
+        }
+        finally
+        {
+            sdk.Dispose();
+        }
+    }
+
+    [Fact]
+    public void Dispose_DisposesCreatedPipelines()
+    {
+        var backend = new DisposableBackend();
+        var factory = new CountingBackendFactory(_ => backend);
+        var options = new LayoutSdkOptions(
+            "onnx",
+            new OpenVinoModelOptions("xml", "bin"));
+        var sdk = new LayoutSdk(options, factory);
+
+        sdk.Process(SampleImage, false, LayoutRuntime.OnnxRuntime);
+        sdk.Dispose();
+
+        Assert.True(backend.Disposed);
     }
 
     [Fact]
