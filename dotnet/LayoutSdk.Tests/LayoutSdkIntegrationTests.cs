@@ -153,7 +153,7 @@ public sealed class LayoutSdkIntegrationTests : IClassFixture<DatasetFixture>
         // Performance assertions
         Assert.True(result.Boxes.Count >= 10, $"Expected at least 10 detections, got {result.Boxes.Count}");
         Assert.True(result.Boxes.Count <= 20, $"Expected at most 20 detections, got {result.Boxes.Count}");
-        Assert.True(result.Metrics.TotalDuration.TotalMilliseconds < 2000, $"Expected < 2s, got {result.Metrics.TotalDuration.TotalMilliseconds:F2}ms");
+        Assert.True(result.Metrics.FullTotalDuration.TotalMilliseconds < 2000, $"Expected < 2s, got {result.Metrics.FullTotalDuration.TotalMilliseconds:F2}ms");
 
         // Quality assertions
         Assert.True(textBoxes.Count >= 5, $"Expected at least 5 text boxes, got {textBoxes.Count}");
@@ -171,15 +171,17 @@ public sealed class LayoutSdkIntegrationTests : IClassFixture<DatasetFixture>
         _output.WriteLine($"\n=== PERFORMANCE METRICS ===");
         _output.WriteLine($"Preprocess time: {result.Metrics.PreprocessDuration.TotalMilliseconds:F2}ms");
         _output.WriteLine($"Inference time: {result.Metrics.InferenceDuration.TotalMilliseconds:F2}ms");
-        _output.WriteLine($"Total time: {result.Metrics.TotalDuration.TotalMilliseconds:F2}ms");
+        _output.WriteLine($"Postprocess time: {result.Metrics.PostprocessDuration.TotalMilliseconds:F2}ms");
+        _output.WriteLine($"Total time: {result.Metrics.FullTotalDuration.TotalMilliseconds:F2}ms");
         _output.WriteLine($"Average confidence: {result.Boxes.Average(b => b.Confidence):F3}");
 
         // Store results for comparison
         _output.WriteLine($"\n=== COMPARISON DATA ===");
         _output.WriteLine($"Python baseline: 13-14 detections, ~800ms");
-        _output.WriteLine($".NET result: {result.Boxes.Count} detections, {result.Metrics.TotalDuration.TotalMilliseconds:F2}ms");
+        _output.WriteLine($".NET result: {result.Boxes.Count} detections, {result.Metrics.FullTotalDuration.TotalMilliseconds:F2}ms");
         _output.WriteLine($"Parity: {Math.Round((double)result.Boxes.Count / 13.5 * 100, 1)}% vs Python count");
-        _output.WriteLine($"Performance: {Math.Round(800.0 / result.Metrics.TotalDuration.TotalMilliseconds * 100, 1)}% vs Python speed");
+        _output.WriteLine($"Performance: {Math.Round(800.0 / result.Metrics.FullTotalDuration.TotalMilliseconds * 100, 1)}% vs Python speed");
+        _output.WriteLine($"Post-processing: {result.Metrics.PostprocessDuration.TotalMilliseconds:F2}ms (advanced algorithms)");
     }
 
 }

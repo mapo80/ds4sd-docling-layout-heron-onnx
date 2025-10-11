@@ -10,12 +10,14 @@ internal sealed class LayoutPipeline : IDisposable
 {
     private readonly ILayoutBackend _backend;
     private readonly IImagePreprocessor _preprocessor;
+    private readonly LayoutPostprocessor _postprocessor;
     private bool _disposed;
 
-    public LayoutPipeline(ILayoutBackend backend, IImagePreprocessor preprocessor)
+    public LayoutPipeline(ILayoutBackend backend, IImagePreprocessor preprocessor, LayoutPostprocessor postprocessor)
     {
         _backend = backend ?? throw new ArgumentNullException(nameof(backend));
         _preprocessor = preprocessor ?? throw new ArgumentNullException(nameof(preprocessor));
+        _postprocessor = postprocessor ?? throw new ArgumentNullException(nameof(postprocessor));
     }
 
     public LayoutPipelineResult Execute(SKBitmap image)
@@ -33,12 +35,20 @@ internal sealed class LayoutPipeline : IDisposable
         var backendResult = _backend.Infer(tensor);
         inferenceWatch.Stop();
 
+        // Apply advanced post-processing
+        var postprocessWatch = Stopwatch.StartNew();
+        var postprocessedBoxes = _postprocessor.Postprocess(backendResult.Boxes);
+        postprocessWatch.Stop();
+
         var metrics = new LayoutExecutionMetrics(
             PreprocessDuration: preprocessWatch.Elapsed,
             InferenceDuration: inferenceWatch.Elapsed,
-            OverlayDuration: TimeSpan.Zero);
+            OverlayDuration: TimeSpan.Zero)
+        {
+            PostprocessDuration = postprocessWatch.Elapsed
+        };
 
-        return new LayoutPipelineResult(backendResult.Boxes, metrics);
+        return new LayoutPipelineResult(postprocessedBoxes, metrics);
     }
 
     public void Dispose()
