@@ -104,26 +104,59 @@ internal sealed class OnnxRuntimeBackend : ILayoutBackend, IDisposable
 
         const float scoreThreshold = 0.3f;
 
-        var detections = new List<BoundingBox>();
+        var labelThresholds = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "Caption", 0.5f },
+            { "Footnote", 0.5f },
+            { "Formula", 0.5f },
+            { "List-item", 0.5f },
+            { "Page-footer", 0.5f },
+            { "Page-header", 0.5f },
+            { "Picture", 0.5f },
+            { "Section-header", 0.4f },
+            { "Table", 0.45f },
+            { "Text", 0.45f },
+            { "Title", 0.4f },
+            { "Code", 0.4f },
+            { "Checkbox-Selected", 0.4f },
+            { "Checkbox-Unselected", 0.4f },
+            { "Form", 0.4f },
+            { "Key-Value Region", 0.4f },
+            { "Document Index", 0.4f }
+        };
+
+        var detections = new List<(BoundingBox Box, float Score)>();
         var numQueries = logits.Dimensions[1];
         var numClasses = logits.Dimensions[2];
 
         for (var q = 0; q < numQueries; q++)
         {
-            var maxProb = float.MinValue;
-            var maxClass = 0;
-
+            var maxLogit = float.NegativeInfinity;
             for (var c = 0; c < numClasses; c++)
             {
-                var prob = logits[0, q, c];
-                if (prob > maxProb)
+                maxLogit = Math.Max(maxLogit, logits[0, q, c]);
+            }
+
+            var expSums = 0f;
+            var bestExp = 0f;
+            var maxClass = 0;
+            for (var c = 0; c < numClasses; c++)
+            {
+                var exp = MathF.Exp(logits[0, q, c] - maxLogit);
+                expSums += exp;
+                if (exp > bestExp)
                 {
-                    maxProb = prob;
+                    bestExp = exp;
                     maxClass = c;
                 }
             }
 
-            var score = 1f / (1f + MathF.Exp(-maxProb));
+            if (expSums <= 0f)
+            {
+                continue;
+            }
+
+            var score = bestExp / expSums;
             if (maxClass == 0 || score < scoreThreshold)
             {
                 continue;
@@ -145,9 +178,88 @@ internal sealed class OnnxRuntimeBackend : ILayoutBackend, IDisposable
             height = Math.Clamp(height, 0f, imageHeight - y);
 
             var label = labelMap.TryGetValue(maxClass, out var mapped) ? mapped : "Unknown";
-            detections.Add(new BoundingBox(x, y, width, height, label));
+            var minScore = labelThresholds.TryGetValue(label, out var threshold) ? threshold : scoreThreshold;
+            if (score < minScore)
+            {
+                continue;
+            }
+
+            detections.Add((new BoundingBox(x, y, width, height, label), score));
         }
 
-        return detections;
+        return ApplyNonMaxSuppression(detections);
+    }
+
+    private static IReadOnlyList<BoundingBox> ApplyNonMaxSuppression(List<(BoundingBox Box, float Score)> detections)
+    {
+        if (detections.Count == 0)
+        {
+            return Array.Empty<BoundingBox>();
+        }
+
+        var ordered = detections
+            .OrderByDescending(d => d.Score)
+            .ToList();
+
+        var result = new List<BoundingBox>();
+
+        const float iouThreshold = 0.7f;
+
+        foreach (var candidate in ordered)
+        {
+            var overlaps = false;
+            foreach (var existing in result)
+            {
+                if (!string.Equals(existing.Label, candidate.Box.Label, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (ComputeIoU(existing, candidate.Box) > iouThreshold)
+                {
+                    overlaps = true;
+                    break;
+                }
+            }
+
+            if (!overlaps)
+            {
+                result.Add(candidate.Box);
+            }
+        }
+
+        return result;
+    }
+
+    private static float ComputeIoU(BoundingBox first, BoundingBox second)
+    {
+        var ax1 = first.X;
+        var ay1 = first.Y;
+        var ax2 = first.X + first.Width;
+        var ay2 = first.Y + first.Height;
+
+        var bx1 = second.X;
+        var by1 = second.Y;
+        var bx2 = second.X + second.Width;
+        var by2 = second.Y + second.Height;
+
+        var interLeft = Math.Max(ax1, bx1);
+        var interTop = Math.Max(ay1, by1);
+        var interRight = Math.Min(ax2, bx2);
+        var interBottom = Math.Min(ay2, by2);
+
+        var interWidth = Math.Max(0f, interRight - interLeft);
+        var interHeight = Math.Max(0f, interBottom - interTop);
+        var interArea = interWidth * interHeight;
+
+        var areaA = Math.Max(0f, first.Width) * Math.Max(0f, first.Height);
+        var areaB = Math.Max(0f, second.Width) * Math.Max(0f, second.Height);
+        var union = areaA + areaB - interArea;
+        if (union <= 0f)
+        {
+            return 0f;
+        }
+
+        return interArea / union;
     }
 }
