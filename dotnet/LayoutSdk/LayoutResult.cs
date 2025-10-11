@@ -5,7 +5,7 @@ using System.Collections.Generic;
 
 namespace LayoutSdk;
 
-public record BoundingBox(float X, float Y, float Width, float Height, string Label);
+public record BoundingBox(float X, float Y, float Width, float Height, string Label, float Confidence = 1.0f);
 
 public class LayoutResult
 {
