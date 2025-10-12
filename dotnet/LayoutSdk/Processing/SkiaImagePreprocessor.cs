@@ -30,7 +30,7 @@ public sealed class SkiaImagePreprocessor : IImagePreprocessor
         var pixels = MemoryMarshal.Cast<byte, SKColor>(pixelBytes);
 
         // Step 2: Convert to tensor with CLIP/ViT normalization (same as HuggingFace)
-        var tensor = ImageTensor.Rent(ModelInputSize, ModelInputSize, Channels);
+        var tensor = ImageTensor.RentPooled(Channels, ModelInputSize, ModelInputSize);
         var span = tensor.AsSpan();
 
         for (var i = 0; i < pixels.Length; i++)

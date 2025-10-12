@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using LayoutSdk.Inference;
 
@@ -40,35 +41,31 @@ public sealed class LayoutPostprocessor
             throw new ArgumentOutOfRangeException(nameof(targetWidth));
         }
 
-        var logitsShape = backendResult.LogitsShape;
-        var boxesShape = backendResult.PredictedBoxesShape;
+        var scoresShape = backendResult.ScoresShape.Span;
+        var boxesShape = backendResult.BoxesShape.Span;
 
-        if (logitsShape[0] != boxesShape[0])
+        if (scoresShape[0] != boxesShape[0])
         {
-            throw new InvalidOperationException("Logits and boxes batch dimensions must match.");
+            throw new InvalidOperationException("Scores and boxes batch dimensions must match.");
         }
 
-        var batchSize = logitsShape[0];
+        var batchSize = scoresShape[0];
         if (batchSize != 1)
         {
             throw new NotSupportedException("Only batch size 1 is supported in the current pipeline.");
         }
 
-        var numQueries = logitsShape[1];
-        var numClasses = logitsShape[2];
+        var numQueries = scoresShape[1];
+        var numClasses = scoresShape[2];
         if (boxesShape[1] != numQueries || boxesShape[2] != 4)
         {
             throw new InvalidOperationException("Box tensor shape must be [batch, queries, 4].");
         }
 
-        var normalizedBoxes = ConvertToCornerCoordinates(
-            backendResult.PredictedBoxes,
-            boxesShape,
-            batchIndex: 0);
-
+        var scores = backendResult.GetScores().Span;
         var candidates = _options.UseFocalLoss
-            ? SelectWithFocalLoss(backendResult.Logits, logitsShape, batchIndex: 0)
-            : SelectWithSoftmax(backendResult.Logits, logitsShape, batchIndex: 0);
+            ? SelectWithFocalLoss(scores, scoresShape, batchIndex: 0)
+            : SelectWithSoftmax(scores, scoresShape, batchIndex: 0);
 
         if (candidates.Count == 0)
         {
@@ -76,6 +73,10 @@ public sealed class LayoutPostprocessor
         }
 
         var results = new List<BoundingBox>(candidates.Count);
+        var boxes = backendResult.GetBoxes().Span;
+        var batchOffset = 0;
+        var stride = boxesShape[2];
+
         foreach (var candidate in candidates)
         {
             if (candidate.QueryIndex < 0 || candidate.QueryIndex >= numQueries)
@@ -95,15 +96,23 @@ public sealed class LayoutPostprocessor
                 continue;
             }
 
-            var baseIndex = candidate.QueryIndex * 4;
-            var x0 = Math.Clamp(normalizedBoxes[baseIndex + 0] * targetWidth, 0f, targetWidth);
-            var y0 = Math.Clamp(normalizedBoxes[baseIndex + 1] * targetHeight, 0f, targetHeight);
-            var x1 = Math.Clamp(normalizedBoxes[baseIndex + 2] * targetWidth, 0f, targetWidth);
-            var y1 = Math.Clamp(normalizedBoxes[baseIndex + 3] * targetHeight, 0f, targetHeight);
+            var sourceIndex = batchOffset + candidate.QueryIndex * stride;
+            var cx = boxes[sourceIndex + 0];
+            var cy = boxes[sourceIndex + 1];
+            var width = boxes[sourceIndex + 2];
+            var height = boxes[sourceIndex + 3];
 
-            var width = x1 - x0;
-            var height = y1 - y0;
-            if (width <= 0f || height <= 0f)
+            var halfWidth = width / 2f;
+            var halfHeight = height / 2f;
+
+            var x0 = Math.Clamp((cx - halfWidth) * targetWidth, 0f, targetWidth);
+            var y0 = Math.Clamp((cy - halfHeight) * targetHeight, 0f, targetHeight);
+            var x1 = Math.Clamp((cx + halfWidth) * targetWidth, 0f, targetWidth);
+            var y1 = Math.Clamp((cy + halfHeight) * targetHeight, 0f, targetHeight);
+
+            var boxWidth = x1 - x0;
+            var boxHeight = y1 - y0;
+            if (boxWidth <= 0f || boxHeight <= 0f)
             {
                 continue;
             }
@@ -111,8 +120,8 @@ public sealed class LayoutPostprocessor
             results.Add(new BoundingBox(
                 (float)x0,
                 (float)y0,
-                (float)width,
-                (float)height,
+                (float)boxWidth,
+                (float)boxHeight,
                 label,
                 candidate.Score));
         }
@@ -121,12 +130,12 @@ public sealed class LayoutPostprocessor
     }
 
     private IReadOnlyList<DetectionCandidate> SelectWithFocalLoss(
-        float[] logits,
-        int[] logitsShape,
+        ReadOnlySpan<float> scores,
+        ReadOnlySpan<int> scoresShape,
         int batchIndex)
     {
-        var numQueries = logitsShape[1];
-        var numClasses = logitsShape[2];
+        var numQueries = scoresShape[1];
+        var numClasses = scoresShape[2];
         var totalEntries = numQueries * numClasses;
 
         var entries = new DetectionCandidate[totalEntries];
@@ -138,7 +147,7 @@ public sealed class LayoutPostprocessor
             {
                 var flatIndex = query * numClasses + cls;
                 var logitIndex = batchOffset + flatIndex;
-                var score = Sigmoid(logits[logitIndex]);
+                var score = Sigmoid(scores[logitIndex]);
                 entries[flatIndex] = new DetectionCandidate(score, query, cls, flatIndex);
             }
         }
@@ -161,69 +170,58 @@ public sealed class LayoutPostprocessor
     }
 
     private IReadOnlyList<DetectionCandidate> SelectWithSoftmax(
-        float[] logits,
-        int[] logitsShape,
+        ReadOnlySpan<float> scores,
+        ReadOnlySpan<int> scoresShape,
         int batchIndex)
     {
-        var numQueries = logitsShape[1];
-        var numClasses = logitsShape[2];
+        var numQueries = scoresShape[1];
+        var numClasses = scoresShape[2];
         var entries = new DetectionCandidate[numQueries];
         var batchOffset = batchIndex * numQueries * numClasses;
 
-        for (var query = 0; query < numQueries; query++)
+        float[]? rented = null;
+        Span<float> probabilities = numClasses <= 256
+            ? stackalloc float[numClasses]
+            : (rented = ArrayPool<float>.Shared.Rent(numClasses)).AsSpan(0, numClasses);
+
+        try
         {
-            var rowOffset = batchOffset + query * numClasses;
-            var probabilities = ComputeSoftmax(logits, rowOffset, numClasses);
-
-            var bestClass = 0;
-            var bestScore = probabilities[0];
-            // In non-focal mode the last class is the "no-object" class.
-            var limit = numClasses - 1;
-            for (var cls = 1; cls < limit; cls++)
+            for (var query = 0; query < numQueries; query++)
             {
-                var score = probabilities[cls];
-                if (score > bestScore)
-                {
-                    bestScore = score;
-                    bestClass = cls;
-                }
-            }
+                var rowOffset = batchOffset + query * numClasses;
+                var row = scores.Slice(rowOffset, numClasses);
+                ComputeSoftmax(row, probabilities);
 
-            entries[query] = new DetectionCandidate(
-                bestScore,
-                query,
-                bestClass,
-                query * limit + bestClass);
+                var bestClass = 0;
+                var bestScore = probabilities[0];
+                // In non-focal mode the last class is the "no-object" class.
+                var limit = numClasses - 1;
+                for (var cls = 1; cls < limit; cls++)
+                {
+                    var score = probabilities[cls];
+                    if (score > bestScore)
+                    {
+                        bestScore = score;
+                        bestClass = cls;
+                    }
+                }
+
+                entries[query] = new DetectionCandidate(
+                    bestScore,
+                    query,
+                    bestClass,
+                    query * limit + bestClass);
+            }
+        }
+        finally
+        {
+            if (rented is not null)
+            {
+                ArrayPool<float>.Shared.Return(rented);
+            }
         }
 
         return entries;
-    }
-
-    private static float[] ConvertToCornerCoordinates(float[] boxes, int[] shape, int batchIndex)
-    {
-        var numQueries = shape[1];
-        var stride = shape[2];
-
-        var corners = new float[numQueries * stride];
-        var batchOffset = batchIndex * numQueries * stride;
-
-        for (var query = 0; query < numQueries; query++)
-        {
-            var sourceIndex = batchOffset + query * stride;
-            var destinationIndex = query * stride;
-
-            var cx = boxes[sourceIndex + 0];
-            var cy = boxes[sourceIndex + 1];
-            var width = boxes[sourceIndex + 2];
-            var height = boxes[sourceIndex + 3];
-
-            corners[destinationIndex + 0] = cx - (width / 2f);
-            corners[destinationIndex + 1] = cy - (height / 2f);
-            corners[destinationIndex + 2] = cx + (width / 2f);
-            corners[destinationIndex + 3] = cy + (height / 2f);
-        }
-
-        return corners;
     }
 
     private string ResolveLabel(int classIndex)
@@ -242,14 +240,13 @@ public sealed class LayoutPostprocessor
         return 1f / (1f + MathF.Exp(neg));
     }
 
-    private static float[] ComputeSoftmax(float[] logits, int offset, int length)
+    private static void ComputeSoftmax(ReadOnlySpan<float> logits, Span<float> destination)
     {
-        var slice = new float[length];
         var max = float.NegativeInfinity;
-        for (var i = 0; i < length; i++)
+        for (var i = 0; i < destination.Length; i++)
         {
-            var value = logits[offset + i];
-            slice[i] = value;
+            var value = logits[i];
+            destination[i] = value;
             if (value > max)
             {
                 max = value;
@@ -257,23 +254,21 @@ public sealed class LayoutPostprocessor
         }
 
         var sum = 0f;
-        for (var i = 0; i < length; i++)
+        for (var i = 0; i < destination.Length; i++)
         {
-            slice[i] = MathF.Exp(slice[i] - max);
-            sum += slice[i];
+            destination[i] = MathF.Exp(destination[i] - max);
+            sum += destination[i];
         }
 
         if (sum == 0f)
         {
-            return slice;
+            return;
         }
 
-        for (var i = 0; i < length; i++)
+        for (var i = 0; i < destination.Length; i++)
         {
-            slice[i] /= sum;
+            destination[i] /= sum;
         }
-
-        return slice;
     }
 
     private readonly struct DetectionCandidate

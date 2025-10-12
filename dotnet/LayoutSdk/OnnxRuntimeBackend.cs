@@ -11,6 +11,7 @@ internal sealed class OnnxRuntimeBackend : ILayoutBackend, IDisposable
 {
     private readonly InferenceSession _session;
     private readonly string _inputName;
+    private readonly OnnxInputBuilder _inputBuilder;
 
     public OnnxRuntimeBackend(string modelPath)
     {
@@ -24,19 +25,17 @@ internal sealed class OnnxRuntimeBackend : ILayoutBackend, IDisposable
 
         _session = new InferenceSession(modelPath, options);
         _inputName = _session.InputMetadata.Keys.First();
+        _inputBuilder = new OnnxInputBuilder(_inputName);
     }
 
     public LayoutBackendResult Infer(ImageTensor tensor)
     {
         ArgumentNullException.ThrowIfNull(tensor);
 
-        var dense = new DenseTensor<float>(
-            tensor.Buffer.AsMemory(0, tensor.Length),
-            new[] { 1, tensor.Channels, tensor.Height, tensor.Width });
+        var shape = new[] { 1, tensor.Channels, tensor.Height, tensor.Width };
 
-        var input = NamedOnnxValue.CreateFromTensor(_inputName, dense);
-        using var results = _session.Run(new[] { input });
-        (input as IDisposable)?.Dispose();
+        using var inputOwner = _inputBuilder.CreateInput(tensor.AsSpan(), shape);
+        var results = _session.Run(new[] { inputOwner.Value });
 
         return ParseOutputs(results);
     }
@@ -46,18 +45,63 @@ internal sealed class OnnxRuntimeBackend : ILayoutBackend, IDisposable
     private static LayoutBackendResult ParseOutputs(
         IDisposableReadOnlyCollection<DisposableNamedOnnxValue> results)
     {
-        var logitsOutput = results.FirstOrDefault(r => r.Name == "logits")
-                           ?? throw new InvalidOperationException("ONNX outputs do not contain 'logits'.");
-        var boxesOutput = results.FirstOrDefault(r => r.Name == "pred_boxes")
-                          ?? throw new InvalidOperationException("ONNX outputs do not contain 'pred_boxes'.");
+        DisposableNamedOnnxValue? scoresOutput = null;
+        DisposableNamedOnnxValue? boxesOutput = null;
 
-        var logits = logitsOutput.AsTensor<float>();
-        var boxes = boxesOutput.AsTensor<float>();
+        TensorOwner? scoresOwner = null;
+        TensorOwner? boxesOwner = null;
 
-        return new LayoutBackendResult(
-            logits.ToArray(),
-            logits.Dimensions.ToArray(),
-            boxes.ToArray(),
-            boxes.Dimensions.ToArray());
+        try
+        {
+            foreach (var output in results)
+            {
+                if (output.Name == "logits")
+                {
+                    scoresOutput = output;
+                }
+                else if (output.Name == "pred_boxes")
+                {
+                    boxesOutput = output;
+                }
+                else
+                {
+                    output.Dispose();
+                }
+            }
+
+            if (scoresOutput is null)
+            {
+                throw new InvalidOperationException("ONNX outputs do not contain 'logits'.");
+            }
+
+            if (boxesOutput is null)
+            {
+                scoresOutput.Dispose();
+                throw new InvalidOperationException("ONNX outputs do not contain 'pred_boxes'.");
+            }
+
+            var scoresTensor = scoresOutput.AsTensor<float>();
+            var boxesTensor = boxesOutput.AsTensor<float>();
+
+            boxesOwner = TensorOwner.FromNamedValue(boxesOutput);
+            scoresOwner = TensorOwner.FromNamedValue(scoresOutput);
+
+            boxesOutput = null;
+            scoresOutput = null;
+
+            return new LayoutBackendResult(
+                boxesOwner,
+                boxesTensor.Dimensions.ToArray(),
+                scoresOwner,
+                scoresTensor.Dimensions.ToArray());
+        }
+        catch
+        {
+            scoresOwner?.Dispose();
+            boxesOwner?.Dispose();
+            scoresOutput?.Dispose();
+            boxesOutput?.Dispose();
+            throw;
+        }
     }
 }

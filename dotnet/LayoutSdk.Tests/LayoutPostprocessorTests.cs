@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using LayoutSdk.Inference;
 using LayoutSdk.Processing;
+using Microsoft.ML.OnnxRuntime;
+using Microsoft.ML.OnnxRuntime.Tensors;
 using Xunit;
 
 namespace LayoutSdk.Tests;
@@ -29,11 +31,20 @@ public sealed class LayoutPostprocessorTests
             0.2f, 0.3f, 0.4f, 0.4f
         };
 
-        var backendResult = new LayoutBackendResult(
-            logits,
-            new[] { 1, 2, 3 },
-            boxes,
-            new[] { 1, 2, 4 });
+        var logitsShape = new[] { 1, 2, 3 };
+        var boxesShape = new[] { 1, 2, 4 };
+        var logitsValue = NamedOnnxValue.CreateFromTensor(
+            "logits",
+            new DenseTensor<float>(logits, logitsShape));
+        var boxesValue = NamedOnnxValue.CreateFromTensor(
+            "pred_boxes",
+            new DenseTensor<float>(boxes, boxesShape));
+
+        using var backendResult = new LayoutBackendResult(
+            TensorOwner.FromNamedValue(boxesValue),
+            boxesShape,
+            TensorOwner.FromNamedValue(logitsValue),
+            logitsShape);
 
         var results = postprocessor.Postprocess(backendResult, targetHeight: 100, targetWidth: 200);
 

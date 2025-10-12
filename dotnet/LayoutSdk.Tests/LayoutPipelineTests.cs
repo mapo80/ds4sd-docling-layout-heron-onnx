@@ -1,5 +1,7 @@
 using LayoutSdk.Inference;
 using LayoutSdk.Processing;
+using Microsoft.ML.OnnxRuntime;
+using Microsoft.ML.OnnxRuntime.Tensors;
 using SkiaSharp;
 using System;
 using System.Collections.Generic;
@@ -23,11 +25,22 @@ public class LayoutPipelineTests
             logits[9] = 5f; // Favor the "Text" class.
 
             var boxes = new[] { 0.5f, 0.5f, 0.5f, 0.5f };
+            var logitsShape = new[] { 1, 1, logits.Length };
+            var boxesShape = new[] { 1, 1, 4 };
+
+            var logitsValue = NamedOnnxValue.CreateFromTensor(
+                "logits",
+                new DenseTensor<float>(logits, logitsShape));
+
+            var boxesValue = NamedOnnxValue.CreateFromTensor(
+                "pred_boxes",
+                new DenseTensor<float>(boxes, boxesShape));
+
             return new LayoutBackendResult(
-                logits,
-                new[] { 1, 1, logits.Length },
-                boxes,
-                new[] { 1, 1, 4 });
+                TensorOwner.FromNamedValue(boxesValue),
+                boxesShape,
+                TensorOwner.FromNamedValue(logitsValue),
+                logitsShape);
         }
 
         public void Dispose()

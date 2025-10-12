@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using LayoutSdk.Inference;
 using LayoutSdk.Metrics;
 using SkiaSharp;
 
@@ -30,24 +31,32 @@ internal sealed class LayoutPipeline : IDisposable
         using var tensor = _preprocessor.Preprocess(image);
         preprocessWatch.Stop();
 
-        var inferenceWatch = Stopwatch.StartNew();
-        var backendResult = _backend.Infer(tensor);
-        inferenceWatch.Stop();
-
-        // Apply HuggingFace-compatible post-processing
-        var postprocessWatch = Stopwatch.StartNew();
-        var postprocessedBoxes = _postprocessor.Postprocess(backendResult, image.Height, image.Width);
-        postprocessWatch.Stop();
-
-        var metrics = new LayoutExecutionMetrics(
-            PreprocessDuration: preprocessWatch.Elapsed,
-            InferenceDuration: inferenceWatch.Elapsed,
-            OverlayDuration: TimeSpan.Zero)
+        LayoutBackendResult? backendResult = null;
+        try
         {
-            PostprocessDuration = postprocessWatch.Elapsed
-        };
+            var inferenceWatch = Stopwatch.StartNew();
+            backendResult = _backend.Infer(tensor);
+            inferenceWatch.Stop();
 
-        return new LayoutPipelineResult(postprocessedBoxes, metrics);
+            // Apply HuggingFace-compatible post-processing
+            var postprocessWatch = Stopwatch.StartNew();
+            var postprocessedBoxes = _postprocessor.Postprocess(backendResult, image.Height, image.Width);
+            postprocessWatch.Stop();
+
+            var metrics = new LayoutExecutionMetrics(
+                PreprocessDuration: preprocessWatch.Elapsed,
+                InferenceDuration: inferenceWatch.Elapsed,
+                OverlayDuration: TimeSpan.Zero)
+            {
+                PostprocessDuration = postprocessWatch.Elapsed
+            };
+
+            return new LayoutPipelineResult(postprocessedBoxes, metrics);
+        }
+        finally
+        {
+            backendResult?.Dispose();
+        }
     }
 
     public void Dispose()

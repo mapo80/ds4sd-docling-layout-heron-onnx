@@ -5,11 +5,11 @@ namespace LayoutSdk.Configuration;
 
 public sealed class LayoutSdkOptions
 {
-   public LayoutSdkOptions(
-       string onnxModelPath,
-       DocumentLanguage defaultLanguage = DocumentLanguage.English,
-       bool validateModelPaths = false)
-   {
+    public LayoutSdkOptions(
+        string onnxModelPath,
+        DocumentLanguage defaultLanguage = DocumentLanguage.English,
+        bool validateModelPaths = false)
+    {
        if (string.IsNullOrWhiteSpace(onnxModelPath))
        {
            throw new ArgumentException("ONNX model path must be provided", nameof(onnxModelPath));
@@ -17,16 +17,18 @@ public sealed class LayoutSdkOptions
 
        OnnxModelPath = onnxModelPath;
        DefaultLanguage = defaultLanguage;
-       ValidateModelPaths = validateModelPaths;
-   }
+        ValidateModelPaths = validateModelPaths;
+    }
 
-   public string OnnxModelPath { get; }
+    public string OnnxModelPath { get; }
 
-   public DocumentLanguage DefaultLanguage { get; }
+    public DocumentLanguage DefaultLanguage { get; }
 
-   public bool ValidateModelPaths { get; }
+    public bool ValidateModelPaths { get; }
 
-   public void EnsureModelPaths()
+    public bool EnableAdvancedNonMaxSuppression { get; set; } = true;
+
+    public void EnsureModelPaths()
    {
        if (!ValidateModelPaths)
        {

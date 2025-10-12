@@ -3,11 +3,32 @@ using LayoutSdk.Configuration;
 using LayoutSdk.Factories;
 using LayoutSdk.Inference;
 using LayoutSdk.Processing;
+using Microsoft.ML.OnnxRuntime;
+using Microsoft.ML.OnnxRuntime.Tensors;
 using System;
 using System.IO;
 using Xunit;
 
 namespace LayoutSdk.Tests;
+
+file static class BackendResultFactory
+{
+    public static LayoutBackendResult Create(float[] logits, int[] logitsShape, float[] boxes, int[] boxesShape)
+    {
+        var logitsValue = NamedOnnxValue.CreateFromTensor(
+            "logits",
+            new DenseTensor<float>(logits, logitsShape));
+        var boxesValue = NamedOnnxValue.CreateFromTensor(
+            "pred_boxes",
+            new DenseTensor<float>(boxes, boxesShape));
+
+        return new LayoutBackendResult(
+            TensorOwner.FromNamedValue(boxesValue),
+            boxesShape,
+            TensorOwner.FromNamedValue(logitsValue),
+            logitsShape);
+    }
+}
 
 file class FakeBackend : ILayoutBackend
 {
@@ -18,7 +39,7 @@ file class FakeBackend : ILayoutBackend
         logits[9] = 5f; // "Text"
 
         var boxes = new[] { 0.5f, 0.5f, 1f, 1f };
-        return new LayoutBackendResult(
+        return BackendResultFactory.Create(
             logits,
             new[] { 1, 1, logits.Length },
             boxes,
@@ -42,7 +63,7 @@ file sealed class DisposableBackend : ILayoutBackend, IDisposable
         var logits = new float[17];
         Array.Fill(logits, -10f);
         var boxes = new[] { 0.5f, 0.5f, 0.5f, 0.5f };
-        return new LayoutBackendResult(
+        return BackendResultFactory.Create(
             logits,
             new[] { 1, 1, logits.Length },
             boxes,
