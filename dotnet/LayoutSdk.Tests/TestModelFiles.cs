@@ -15,12 +15,4 @@ internal static class TestModelFiles
         return path;
     }
 
-    public static (string Xml, string Bin) CreateOpenVinoModelFiles()
-    {
-        var xmlPath = Path.Combine(Path.GetTempPath(), $"model-{Guid.NewGuid():N}.xml");
-        var binPath = Path.Combine(Path.GetTempPath(), $"model-{Guid.NewGuid():N}.bin");
-        File.WriteAllBytes(xmlPath, Convert.FromBase64String(OpenVinoXmlBase64));
-        File.WriteAllBytes(binPath, Array.Empty<byte>());
-        return (xmlPath, binPath);
-    }
 }

@@ -11,12 +11,9 @@ public static class LayoutSdkBundledModels
     public const string OptimizedFp16OnnxFileName = "heron-optimized-fp16.onnx";
     public const string OptimizedOrtFileName = "heron-optimized.ort";
     public const string OptimizedRuntimeOrtFileName = "heron-optimized.with_runtime_opt.ort";
-    public const string OpenVinoXmlFileName = "heron-converted.xml";
-    public const string OpenVinoBinFileName = "heron-converted.bin";
 
     public static string ModelsRoot => Path.Combine(AppContext.BaseDirectory, "models");
 
-    public static string OpenVinoRoot => Path.Combine(ModelsRoot, "ov-ir");
 
     public static string GetOptimizedOnnxPath() => Path.Combine(ModelsRoot, OptimizedOnnxFileName);
 
@@ -28,9 +25,6 @@ public static class LayoutSdkBundledModels
 
     public static string GetOptimizedRuntimeOrtPath() => Path.Combine(ModelsRoot, OptimizedRuntimeOrtFileName);
 
-    public static string GetOpenVinoXmlPath() => Path.Combine(OpenVinoRoot, OpenVinoXmlFileName);
-
-    public static string GetOpenVinoBinPath() => Path.Combine(OpenVinoRoot, OpenVinoBinFileName);
 
     public static LayoutSdkOptions CreateOptions(
         DocumentLanguage defaultLanguage = DocumentLanguage.English,
@@ -58,7 +52,5 @@ public static class LayoutSdkBundledModels
         yield return GetOptimizedFp16OnnxPath();
         yield return GetOptimizedOrtPath();
         yield return GetOptimizedRuntimeOrtPath();
-        yield return GetOpenVinoXmlPath();
-        yield return GetOpenVinoBinPath();
     }
 }

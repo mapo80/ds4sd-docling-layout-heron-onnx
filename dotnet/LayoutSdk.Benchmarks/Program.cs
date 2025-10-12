@@ -7,6 +7,66 @@ using LayoutSdk;
 using LayoutSdk.Configuration;
 using SkiaSharp;
 
+var parameters = ParseArgs(args);
+
+if (!parameters.TryGetValue("--variant-name", out var variant))
+{
+    Console.Error.WriteLine("--variant-name is required");
+    return;
+}
+
+var compare = parameters.ContainsKey("--compare");
+if (compare)
+{
+    Console.Error.WriteLine("--compare is not supported because the ORT runtime is unavailable in this build.");
+    return;
+}
+
+var runtime = LayoutRuntime.Onnx;
+if (parameters.TryGetValue("--runtime", out var runtimeValue))
+{
+    runtime = Enum.Parse<LayoutRuntime>(runtimeValue, ignoreCase: true);
+    if (runtime != LayoutRuntime.Onnx)
+    {
+        Console.Error.WriteLine($"Runtime '{runtime}' is not supported. Use 'onnx'.");
+        return;
+    }
+}
+
+var imagesDir = parameters.GetValueOrDefault("--images", "./dataset");
+var outputRoot = parameters.GetValueOrDefault("--output", "results");
+int warmup = int.Parse(parameters.GetValueOrDefault("--warmup", "1"), CultureInfo.InvariantCulture);
+int runsPerImage = int.Parse(parameters.GetValueOrDefault("--runs-per-image", "1"), CultureInfo.InvariantCulture);
+int targetH = int.Parse(parameters.GetValueOrDefault("--target-h", "640"), CultureInfo.InvariantCulture);
+int targetW = int.Parse(parameters.GetValueOrDefault("--target-w", "640"), CultureInfo.InvariantCulture);
+
+var images = CollectImages(imagesDir).ToList();
+if (images.Count == 0)
+{
+    using var bmp = new SKBitmap(targetW, targetH);
+    using var img = SKImage.FromBitmap(bmp);
+    var tmp = Path.GetTempFileName() + ".png";
+    using var data = img.Encode(SKEncodedImageFormat.Png, 90);
+    using var fs = File.OpenWrite(tmp);
+    data.SaveTo(fs);
+    images.Add(tmp);
+}
+
+var onnxModelPath = parameters.GetValueOrDefault("--onnx-model", "models/heron-optimized.onnx");
+
+var options = new LayoutSdkOptions(
+    onnxModelPath,
+    defaultLanguage: DocumentLanguage.English,
+    validateModelPaths: parameters.ContainsKey("--validate-models"));
+
+var timestamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+var runDirectory = Path.Combine(outputRoot, variant, $"run-{timestamp}");
+Directory.CreateDirectory(runDirectory);
+
+RunBenchmark(runtime, options, images, runDirectory, warmup, runsPerImage, targetH, targetW);
+
+Console.WriteLine($"OK: {runDirectory}");
+
 static Dictionary<string, string> ParseArgs(string[] args)
 {
     var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -30,10 +90,11 @@ static Dictionary<string, string> ParseArgs(string[] args)
 
 static string ResizeToTemp(string path, int w, int h)
 {
-    using var bmp = SKBitmap.Decode(path);
-    using var resized = bmp.Resize(new SKImageInfo(w, h), SKFilterQuality.High);
+    using var bmp = SKBitmap.Decode(path) ?? throw new InvalidOperationException($"Unable to decode image: {path}");
+    using var resized = bmp.Resize(new SKImageInfo(w, h), BenchmarkDefaults.HighQualitySampling);
     var tmp = Path.GetTempFileName() + ".png";
-    using var img = SKImage.FromBitmap(resized ?? bmp);
+    var source = resized ?? bmp;
+    using var img = SKImage.FromBitmap(source);
     using var data = img.Encode(SKEncodedImageFormat.Png, 90);
     using var fs = File.OpenWrite(tmp);
     data.SaveTo(fs);
@@ -49,11 +110,11 @@ static IReadOnlyList<string> CollectImages(string directory)
 
     return Directory.GetFiles(directory)
         .Where(f => f.EndsWith(".jpg", true, CultureInfo.InvariantCulture)
-                 || f.EndsWith(".jpeg", true, CultureInfo.InvariantCulture)
-                 || f.EndsWith(".png", true, CultureInfo.InvariantCulture)
-                 || f.EndsWith(".bmp", true, CultureInfo.InvariantCulture)
-                 || f.EndsWith(".tif", true, CultureInfo.InvariantCulture)
-                 || f.EndsWith(".tiff", true, CultureInfo.InvariantCulture))
+                  || f.EndsWith(".jpeg", true, CultureInfo.InvariantCulture)
+                  || f.EndsWith(".png", true, CultureInfo.InvariantCulture)
+                  || f.EndsWith(".bmp", true, CultureInfo.InvariantCulture)
+                  || f.EndsWith(".tif", true, CultureInfo.InvariantCulture)
+                  || f.EndsWith(".tiff", true, CultureInfo.InvariantCulture))
         .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
         .ToList();
 }
@@ -75,12 +136,8 @@ static string Sha256Of(string path)
 {
     using var sha = SHA256.Create();
     using var stream = File.OpenRead(path);
-    return Convert.ToHexString(sha.ComputeHash(stream)).ToLowerInvariant();
+    return Convert.ToHexString(sha.ComputeHash(stream));
 }
-
-record BenchmarkSummary(int Count, double MeanMs, double MedianMs, double P95Ms);
-
-record BenchmarkArtifacts(LayoutRuntime Runtime, string OutputDirectory, BenchmarkSummary Summary);
 
 static BenchmarkArtifacts RunBenchmark(
     LayoutRuntime runtime,
@@ -129,7 +186,7 @@ static BenchmarkArtifacts RunBenchmark(
 
     File.WriteAllText(
         Path.Combine(outputDir, "summary.json"),
-        JsonSerializer.Serialize(summary, new JsonSerializerOptions { WriteIndented = true }));
+        JsonSerializer.Serialize(summary, BenchmarkDefaults.PrettyJson));
 
     object modelInfo = runtime switch
     {
@@ -139,41 +196,21 @@ static BenchmarkArtifacts RunBenchmark(
             model_path = options.OnnxModelPath,
             model_size_bytes = File.Exists(options.OnnxModelPath) ? new FileInfo(options.OnnxModelPath).Length : 0L,
             device = "CPU",
-            precision = options.OnnxModelPath.ToLowerInvariant().Contains("fp16") ? "fp16" : "fp32"
+            precision = options.OnnxModelPath.Contains("fp16", StringComparison.OrdinalIgnoreCase) ? "fp16" : "fp32"
         },
-        LayoutRuntime.Ort => new
-        {
-            runtime = "ort",
-            model_path = options.OrtModelPath,
-            model_size_bytes = !string.IsNullOrWhiteSpace(options.OrtModelPath) && File.Exists(options.OrtModelPath)
-                ? new FileInfo(options.OrtModelPath).Length
-                : 0L,
-            device = "CPU",
-            precision = options.OrtModelPath?.ToLowerInvariant().Contains("fp16") == true ? "fp16" : "fp32"
-        },
-        LayoutRuntime.OpenVino => new
-        {
-            runtime = "openvino",
-            xml_path = options.OpenVino.ModelXmlPath,
-            xml_size_bytes = File.Exists(options.OpenVino.ModelXmlPath) ? new FileInfo(options.OpenVino.ModelXmlPath).Length : 0L,
-            bin_path = options.OpenVino.WeightsBinPath,
-            bin_size_bytes = File.Exists(options.OpenVino.WeightsBinPath) ? new FileInfo(options.OpenVino.WeightsBinPath).Length : 0L,
-            device = "CPU",
-            precision = options.OpenVino.ModelXmlPath.ToLowerInvariant().Contains("fp16") ? "fp16" : "fp32"
-        },
-        _ => throw new ArgumentOutOfRangeException(nameof(runtime), runtime, null)
+        _ => throw new NotSupportedException($"Runtime {runtime} is not supported. Only ONNX runtime metadata is available.")
     };
 
     File.WriteAllText(
         Path.Combine(outputDir, "model_info.json"),
-        JsonSerializer.Serialize(modelInfo, new JsonSerializerOptions { WriteIndented = true }));
+        JsonSerializer.Serialize(modelInfo, BenchmarkDefaults.PrettyJson));
 
     var env = new
     {
         dotnet = Environment.Version.ToString(),
         os = Environment.OSVersion.ToString()
     };
-    File.WriteAllText(Path.Combine(outputDir, "env.json"), JsonSerializer.Serialize(env, new JsonSerializerOptions { WriteIndented = true }));
+    File.WriteAllText(Path.Combine(outputDir, "env.json"), JsonSerializer.Serialize(env, BenchmarkDefaults.PrettyJson));
 
     File.WriteAllText(
         Path.Combine(outputDir, "config.json"),
@@ -184,109 +221,34 @@ static BenchmarkArtifacts RunBenchmark(
             runs_per_image = runsPerImage,
             target_h = targetH,
             target_w = targetW
-        }, new JsonSerializerOptions { WriteIndented = true }));
+        }, BenchmarkDefaults.PrettyJson));
 
-    var files = new[] { "timings.csv", "summary.json", "model_info.json", "env.json", "config.json" }
+    var files = BenchmarkDefaults.ManifestFiles
         .Select(f => new { file = f, sha256 = Sha256Of(Path.Combine(outputDir, f)) })
         .ToList();
 
     File.WriteAllText(
         Path.Combine(outputDir, "manifest.json"),
-        JsonSerializer.Serialize(new { files }, new JsonSerializerOptions { WriteIndented = true }));
+        JsonSerializer.Serialize(new { files }, BenchmarkDefaults.PrettyJson));
 
     File.WriteAllText(Path.Combine(outputDir, "logs.txt"), $"RUN {runtime} ok, N={timings.Count}\n");
-
     return new BenchmarkArtifacts(runtime, outputDir, summary);
 }
 
-var parameters = ParseArgs(args);
-
-if (!parameters.TryGetValue("--variant-name", out var variant))
+internal static class BenchmarkDefaults
 {
-    Console.Error.WriteLine("--variant-name is required");
-    return;
-}
-
-var compare = parameters.ContainsKey("--compare");
-LayoutRuntime[] runtimes;
-if (compare)
-{
-    runtimes = new[] { LayoutRuntime.Onnx, LayoutRuntime.OpenVino };
-}
-else if (parameters.TryGetValue("--runtime", out var runtimeValue))
-{
-    runtimes = new[] { Enum.Parse<LayoutRuntime>(runtimeValue, ignoreCase: true) };
-}
-else
-{
-    Console.Error.WriteLine("--runtime is required when --compare is not specified");
-    return;
-}
-
-var imagesDir = parameters.GetValueOrDefault("--images", "./dataset");
-var outputRoot = parameters.GetValueOrDefault("--output", "results");
-int warmup = int.Parse(parameters.GetValueOrDefault("--warmup", "1"), CultureInfo.InvariantCulture);
-int runsPerImage = int.Parse(parameters.GetValueOrDefault("--runs-per-image", "1"), CultureInfo.InvariantCulture);
-int targetH = int.Parse(parameters.GetValueOrDefault("--target-h", "640"), CultureInfo.InvariantCulture);
-int targetW = int.Parse(parameters.GetValueOrDefault("--target-w", "640"), CultureInfo.InvariantCulture);
-
-var images = CollectImages(imagesDir).ToList();
-if (images.Count == 0)
-{
-    using var bmp = new SKBitmap(targetW, targetH);
-    using var img = SKImage.FromBitmap(bmp);
-    var tmp = Path.GetTempFileName() + ".png";
-    using var data = img.Encode(SKEncodedImageFormat.Png, 90);
-    using var fs = File.OpenWrite(tmp);
-    data.SaveTo(fs);
-    images.Add(tmp);
-}
-
-if (compare && images.Count > 2)
-{
-    images = images.Take(2).ToList();
-}
-
-var onnxModelPath = parameters.GetValueOrDefault("--onnx-model", "models/heron-optimized.onnx");
-var ortModelPath = parameters.GetValueOrDefault("--ort-model", "models/heron-optimized.with_runtime_opt.ort");
-var openVinoXml = parameters.GetValueOrDefault("--openvino-xml", "models/ov-ir/heron-optimized.xml");
-parameters.TryGetValue("--openvino-bin", out var openVinoBin);
-var openVinoOptions = string.IsNullOrWhiteSpace(openVinoBin)
-    ? new OpenVinoModelOptions(openVinoXml)
-    : new OpenVinoModelOptions(openVinoXml, openVinoBin);
-
-var options = new LayoutSdkOptions(
-    onnxModelPath,
-    ortModelPath,
-    openVinoOptions,
-    defaultLanguage: DocumentLanguage.English,
-    validateModelPaths: parameters.ContainsKey("--validate-models"));
-
-var timestamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
-var runDirectory = Path.Combine(outputRoot, variant, $"run-{timestamp}");
-Directory.CreateDirectory(runDirectory);
-
-var artifacts = new List<BenchmarkArtifacts>();
-foreach (var runtime in runtimes)
-{
-    var runtimeDir = compare
-        ? Path.Combine(runDirectory, runtime.ToString().ToLowerInvariant())
-        : runDirectory;
-    artifacts.Add(RunBenchmark(runtime, options, images, runtimeDir, warmup, runsPerImage, targetH, targetW));
-}
-
-if (compare)
-{
-    var payload = artifacts.Select(a => new
+    public static readonly JsonSerializerOptions PrettyJson = new() { WriteIndented = true };
+    public static readonly SKSamplingOptions HighQualitySampling = new(SKFilterMode.Linear, SKMipmapMode.Linear);
+    public static readonly IReadOnlyList<string> ManifestFiles = new[]
     {
-        runtime = a.Runtime.ToString(),
-        summary = a.Summary,
-        output_directory = Path.GetRelativePath(runDirectory, a.OutputDirectory)
-    });
-
-    File.WriteAllText(
-        Path.Combine(runDirectory, "comparison.json"),
-        JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }));
+        "timings.csv",
+        "summary.json",
+        "model_info.json",
+        "env.json",
+        "config.json"
+    };
 }
 
-Console.WriteLine($"OK: {runDirectory}");
+internal sealed record BenchmarkSummary(int Count, double MeanMs, double MedianMs, double P95Ms);
+
+internal sealed record BenchmarkArtifacts(LayoutRuntime Runtime, string OutputDirectory, BenchmarkSummary Summary);
