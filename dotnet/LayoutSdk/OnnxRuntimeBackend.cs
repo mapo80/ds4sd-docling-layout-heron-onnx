@@ -8,20 +8,23 @@ using LayoutSdk.Processing;
 
 namespace LayoutSdk;
 
-internal enum OnnxModelFormat
-{
-    Onnx,
-    Ort
-}
-
 internal sealed class OnnxRuntimeBackend : ILayoutBackend, IDisposable
 {
     private readonly InferenceSession _session;
     private readonly string _inputName;
 
-    public OnnxRuntimeBackend(string modelPath, OnnxModelFormat format = OnnxModelFormat.Onnx)
+    public OnnxRuntimeBackend(string modelPath)
     {
-        using var options = CreateSessionOptions(format);
+        // Match Python ONNX Runtime configuration exactly
+        var options = new SessionOptions
+        {
+            // Use CPU provider like Python: providers=["CPUExecutionProvider"]
+            GraphOptimizationLevel = GraphOptimizationLevel.ORT_DISABLE_ALL, // Disable optimizations to match Python
+            ExecutionMode = ExecutionMode.ORT_SEQUENTIAL,
+            IntraOpNumThreads = 0,
+            InterOpNumThreads = 0  // Let ONNX decide threading
+        };
+
         _session = new InferenceSession(modelPath, options);
         _inputName = _session.InputMetadata.Keys.First();
     }
@@ -43,21 +46,6 @@ internal sealed class OnnxRuntimeBackend : ILayoutBackend, IDisposable
     }
 
     public void Dispose() => _session.Dispose();
-
-    private static SessionOptions CreateSessionOptions(OnnxModelFormat format)
-    {
-        var options = new SessionOptions
-        {
-            GraphOptimizationLevel = format == OnnxModelFormat.Ort
-                ? GraphOptimizationLevel.ORT_DISABLE_ALL
-                : GraphOptimizationLevel.ORT_ENABLE_ALL,
-            ExecutionMode = ExecutionMode.ORT_SEQUENTIAL,
-            IntraOpNumThreads = 0,
-            InterOpNumThreads = 1
-        };
-
-        return options;
-    }
 
     private static IReadOnlyList<BoundingBox> ParseOutputs(
         IDisposableReadOnlyCollection<DisposableNamedOnnxValue> results,
@@ -102,30 +90,8 @@ internal sealed class OnnxRuntimeBackend : ILayoutBackend, IDisposable
             { 17, "Key-Value Region" }
         };
 
-        const float scoreThreshold = 0.3f;
-
-        var labelThresholds = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase)
-        {
-            { "Caption", 0.5f },
-            { "Footnote", 0.5f },
-            { "Formula", 0.5f },
-            { "List-item", 0.5f },
-            { "Page-footer", 0.5f },
-            { "Page-header", 0.5f },
-            { "Picture", 0.5f },
-            { "Section-header", 0.4f },
-            { "Table", 0.45f },
-            { "Text", 0.45f },
-            { "Title", 0.4f },
-            { "Code", 0.4f },
-            { "Checkbox-Selected", 0.4f },
-            { "Checkbox-Unselected", 0.4f },
-            { "Form", 0.4f },
-            { "Key-Value Region", 0.4f },
-            { "Document Index", 0.4f }
-        };
-
-        var detections = new List<(BoundingBox Box, float Score)>();
+        // Match Python: collect all detections first, then filter
+        var detections = new List<(BoundingBox Box, float Score, int ClassId)>();
         var numQueries = logits.Dimensions[1];
         var numClasses = logits.Dimensions[2];
 
@@ -157,10 +123,6 @@ internal sealed class OnnxRuntimeBackend : ILayoutBackend, IDisposable
             }
 
             var score = bestExp / expSums;
-            if (maxClass == 0 || score < scoreThreshold)
-            {
-                continue;
-            }
 
             var cx = boxes[0, q, 0];
             var cy = boxes[0, q, 1];
@@ -178,16 +140,67 @@ internal sealed class OnnxRuntimeBackend : ILayoutBackend, IDisposable
             height = Math.Clamp(height, 0f, imageHeight - y);
 
             var label = labelMap.TryGetValue(maxClass, out var mapped) ? mapped : "Unknown";
-            var minScore = labelThresholds.TryGetValue(label, out var threshold) ? threshold : scoreThreshold;
-            if (score < minScore)
-            {
-                continue;
-            }
 
-            detections.Add((new BoundingBox(x, y, width, height, label), score));
+            // Collect ALL detections (including background and low scores)
+            detections.Add((new BoundingBox(x, y, width, height, label), score, maxClass));
         }
 
-        return ApplyNonMaxSuppression(detections);
+        // Apply HuggingFace-style post-processing (match Python exactly)
+        return ApplyHuggingFacePostProcessing(detections, imageWidth, imageHeight);
+    }
+
+    private static IReadOnlyList<BoundingBox> ApplyHuggingFacePostProcessing(
+        List<(BoundingBox Box, float Score, int ClassId)> detections,
+        int imageWidth,
+        int imageHeight)
+    {
+        // Step 1: Filter out background and low confidence (match Python threshold=0.25)
+        var filtered = detections.Where(d => d.ClassId != 0 && d.Score >= 0.25f).ToList();
+
+        // Step 2: Sort by confidence (highest first)
+        var sorted = filtered.OrderByDescending(d => d.Score).ToList();
+
+        // Step 3: Apply Non-Maximum Suppression (NMS) like HuggingFace
+        return ApplyNMS(sorted, iouThreshold: 0.7f);
+    }
+
+    private static IReadOnlyList<BoundingBox> ApplyNMS(
+        List<(BoundingBox Box, float Score, int ClassId)> detections,
+        float iouThreshold)
+    {
+        if (detections.Count == 0)
+        {
+            return Array.Empty<BoundingBox>();
+        }
+
+        var result = new List<BoundingBox>();
+
+        foreach (var candidate in detections)
+        {
+            var shouldKeep = true;
+
+            foreach (var existing in result)
+            {
+                // Only suppress if same label
+                if (!string.Equals(existing.Label, candidate.Box.Label, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (ComputeIoU(existing, candidate.Box) > iouThreshold)
+                {
+                    shouldKeep = false;
+                    break;
+                }
+            }
+
+            if (shouldKeep)
+            {
+                result.Add(candidate.Box);
+            }
+        }
+
+        return result;
     }
 
     private static IReadOnlyList<BoundingBox> ApplyNonMaxSuppression(List<(BoundingBox Box, float Score)> detections)

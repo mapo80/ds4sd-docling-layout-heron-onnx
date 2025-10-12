@@ -34,14 +34,9 @@ public static class LayoutSdkBundledModels
 
     public static LayoutSdkOptions CreateOptions(
         DocumentLanguage defaultLanguage = DocumentLanguage.English,
-        bool validateModelPaths = true,
-        bool useRuntimeOptimizedOrt = true)
+        bool validateModelPaths = true)
         => new(
             onnxModelPath: GetOptimizedOnnxPath(),
-            ortModelPath: useRuntimeOptimizedOrt ? GetOptimizedRuntimeOrtPath() : GetOptimizedOrtPath(),
-            openVino: new OpenVinoModelOptions(
-                modelXmlPath: GetOpenVinoXmlPath(),
-                weightsBinPath: GetOpenVinoBinPath()),
             defaultLanguage: defaultLanguage,
             validateModelPaths: validateModelPaths);
 

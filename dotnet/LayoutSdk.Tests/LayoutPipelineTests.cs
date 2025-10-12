@@ -5,6 +5,7 @@ using SkiaSharp;
 using System;
 using System.Collections.Generic;
 using Xunit;
+using LayoutSdk.Configuration;
 
 namespace LayoutSdk.Tests;
 

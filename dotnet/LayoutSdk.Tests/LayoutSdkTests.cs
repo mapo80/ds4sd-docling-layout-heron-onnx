@@ -58,8 +58,6 @@ public class LayoutSdkTests
     {
         var options = new LayoutSdkOptions(
             "onnx-path",
-            "ort-path",
-            new OpenVinoModelOptions("xml-path", "bin-path"),
             DocumentLanguage.Italian);
         return new LayoutSdk(options, new FakeBackendFactory());
     }
@@ -109,10 +107,7 @@ public class LayoutSdkTests
     {
         var backend = new DisposableBackend();
         var factory = new CountingBackendFactory(_ => backend);
-        var options = new LayoutSdkOptions(
-            "onnx",
-            "ort",
-            new OpenVinoModelOptions("xml", "bin"));
+        var options = new LayoutSdkOptions("onnx");
         var sdk = new LayoutSdk(options, factory);
 
         try
@@ -134,22 +129,17 @@ public class LayoutSdkTests
         var factory = new CountingBackendFactory(runtime => runtime switch
         {
             LayoutRuntime.Onnx => new DisposableBackend(),
-            LayoutRuntime.Ort => new DisposableBackend(),
-            _ => throw new InvalidOperationException()
+            _ => throw new NotSupportedException("Only ONNX runtime is supported")
         });
 
-        var options = new LayoutSdkOptions(
-            "onnx",
-            "ort",
-            new OpenVinoModelOptions("xml", "bin"));
+        var options = new LayoutSdkOptions("onnx");
         var sdk = new LayoutSdk(options, factory);
 
         try
         {
             var path = SampleImage;
             sdk.Process(path, false, LayoutRuntime.Onnx);
-            sdk.Process(path, false, LayoutRuntime.Ort);
-            Assert.Equal(2, factory.Created);
+            Assert.Equal(1, factory.Created);
         }
         finally
         {
@@ -162,10 +152,7 @@ public class LayoutSdkTests
     {
         var backend = new DisposableBackend();
         var factory = new CountingBackendFactory(_ => backend);
-        var options = new LayoutSdkOptions(
-            "onnx",
-            "ort",
-            new OpenVinoModelOptions("xml", "bin"));
+        var options = new LayoutSdkOptions("onnx");
         var sdk = new LayoutSdk(options, factory);
 
         sdk.Process(SampleImage, false, LayoutRuntime.Onnx);
@@ -179,8 +166,6 @@ public class LayoutSdkTests
     {
         var options = new LayoutSdkOptions(
             "missing",
-            "missing.ort",
-            new OpenVinoModelOptions("missing.xml", "missing.bin"),
             validateModelPaths: true);
         Assert.Throws<FileNotFoundException>(() => options.EnsureModelPaths());
     }
@@ -189,14 +174,10 @@ public class LayoutSdkTests
     public void OptionsEnsureModelPathsSucceedsWhenFilesExist()
     {
         var onnx = Path.GetTempFileName();
-        var xml = Path.GetTempFileName();
-        var bin = Path.GetTempFileName();
         try
         {
             var options = new LayoutSdkOptions(
                 onnx,
-                ortModelPath: null,
-                openVino: new OpenVinoModelOptions(xml, bin),
                 defaultLanguage: DocumentLanguage.English,
                 validateModelPaths: true);
             options.EnsureModelPaths();
@@ -204,15 +185,7 @@ public class LayoutSdkTests
         finally
         {
             File.Delete(onnx);
-            File.Delete(xml);
-            File.Delete(bin);
         }
     }
 
-    [Fact]
-    public void OpenVinoModelOptionsInfersBinPathWhenMissing()
-    {
-        var options = new OpenVinoModelOptions("/tmp/model.xml");
-        Assert.Equal(Path.ChangeExtension("/tmp/model.xml", ".bin"), options.WeightsBinPath);
-}
 }

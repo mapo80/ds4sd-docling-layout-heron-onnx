@@ -18,20 +18,17 @@ public sealed class LayoutSdk : IDisposable
     private readonly ILayoutBackendFactory _backendFactory;
     private readonly IImageOverlayRenderer _overlayRenderer;
     private readonly IImagePreprocessor _preprocessor;
-    private readonly LayoutPostprocessor _postprocessor;
 
     public LayoutSdk(
         LayoutSdkOptions options,
         ILayoutBackendFactory? backendFactory = null,
         IImageOverlayRenderer? overlayRenderer = null,
-        IImagePreprocessor? preprocessor = null,
-        LayoutPostprocessor? postprocessor = null)
+        IImagePreprocessor? preprocessor = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _backendFactory = backendFactory ?? new LayoutBackendFactory(_options);
         _overlayRenderer = overlayRenderer ?? new ImageOverlayRenderer();
         _preprocessor = preprocessor ?? new SkiaImagePreprocessor();
-        _postprocessor = postprocessor ?? new LayoutPostprocessor(LayoutPostprocessOptions.CreateDefault());
     }
 
     public LayoutResult Process(string imagePath, bool overlay, LayoutRuntime runtime)
@@ -41,7 +38,7 @@ public sealed class LayoutSdk : IDisposable
         using var bitmap = SKBitmap.Decode(imagePath)
                            ?? throw new InvalidOperationException(LayoutDefaults.ImageDecodeFailureMessage);
 
-        var pipeline = _pipelines.GetOrAdd(runtime, r => new LayoutPipeline(_backendFactory.Create(r), _preprocessor, _postprocessor));
+        var pipeline = _pipelines.GetOrAdd(runtime, r => new LayoutPipeline(_backendFactory.Create(r), _preprocessor));
         var pipelineResult = pipeline.Execute(bitmap);
 
         var overlayDuration = TimeSpan.Zero;

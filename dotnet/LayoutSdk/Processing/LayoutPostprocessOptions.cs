@@ -19,9 +19,9 @@ public sealed class LayoutPostprocessOptions
     public float MaxRelativeDistance { get; set; } = 0.5f;
 
     /// <summary>
-    /// Default confidence threshold for filtering.
+    /// Default confidence threshold for filtering (matches Python threshold=0.25).
     /// </summary>
-    public float DefaultThreshold { get; set; } = 0.3f;
+    public float DefaultThreshold { get; set; } = 0.25f;
 
     /// <summary>
     /// Label-specific confidence thresholds.
@@ -107,7 +107,7 @@ public sealed class LayoutPostprocessOptions
     public float FloatingPointTolerance { get; set; } = 1e-6f;
 
     /// <summary>
-    /// Creates default options optimized for document layout processing.
+    /// Creates default options optimized for document layout processing (matches Python behavior).
     /// </summary>
     /// <returns>Default options</returns>
     public static LayoutPostprocessOptions CreateDefault()
@@ -116,7 +116,7 @@ public sealed class LayoutPostprocessOptions
         {
             UnionFindMergeThreshold = 0.3f,
             MaxRelativeDistance = 0.5f,
-            DefaultThreshold = 0.3f,
+            DefaultThreshold = 0.25f,  // Match Python threshold=0.25
             SpatialIndexCellSize = 50f,
             SpatialContextRadius = 100f,
             RelationshipAnalysisRadius = 150f,

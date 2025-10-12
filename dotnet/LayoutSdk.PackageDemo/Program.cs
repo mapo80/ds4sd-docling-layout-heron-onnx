@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
 using LayoutSdk;
 using LayoutSdk.Configuration;
@@ -29,66 +28,16 @@ Console.WriteLine($"Running inference with input: {preparedImagePath}");
 
 using var sdk = new LayoutSdk.LayoutSdk(options);
 
-var runtimes = new[]
-{
-    LayoutRuntime.Onnx,
-    LayoutRuntime.Ort,
-    LayoutRuntime.OpenVino
-};
-
-var results = new Dictionary<LayoutRuntime, LayoutResult>();
-
-foreach (var runtime in runtimes)
-{
-    Console.WriteLine();
-    Console.WriteLine($"=== {runtime} ===");
-    Console.WriteLine($"Model source: {DescribeModelSource(runtime)}");
-
-    var result = RunInference(sdk, runtime, preparedImagePath);
-    results[runtime] = result;
-
-    Console.WriteLine($"Detected {result.Boxes.Count} layout elements.");
-    Console.WriteLine($"Preprocess ms: {result.Metrics.PreprocessDuration.TotalMilliseconds:F2}");
-    Console.WriteLine($"Inference ms: {result.Metrics.InferenceDuration.TotalMilliseconds:F2}");
-    Console.WriteLine($"Total ms: {result.Metrics.TotalDuration.TotalMilliseconds:F2}");
-}
-
 Console.WriteLine();
-ValidateParity(results, LayoutRuntime.Onnx, LayoutRuntime.Ort);
-ValidateParity(results, LayoutRuntime.Onnx, LayoutRuntime.OpenVino);
+Console.WriteLine("=== ONNX Runtime ===");
+Console.WriteLine($"Model source: {LayoutSdkBundledModels.GetOptimizedOnnxPath()}");
 
-static LayoutResult RunInference(LayoutSdk.LayoutSdk sdk, LayoutRuntime runtime, string imagePath)
-{
-    return sdk.Process(imagePath, overlay: false, runtime);
-}
+var result = sdk.Process(preparedImagePath, overlay: false, LayoutRuntime.Onnx);
 
-static void ValidateParity(IDictionary<LayoutRuntime, LayoutResult> results, LayoutRuntime baseline, LayoutRuntime other)
-{
-    if (!results.TryGetValue(baseline, out var baselineResult) ||
-        !results.TryGetValue(other, out var otherResult))
-    {
-        return;
-    }
-
-    var difference = Math.Abs(baselineResult.Boxes.Count - otherResult.Boxes.Count);
-    if (difference == 0)
-    {
-        Console.WriteLine($"Results parity check ({baseline} vs {other}): OK ({baselineResult.Boxes.Count} boxes).");
-    }
-    else
-    {
-        Console.WriteLine($"Results parity check ({baseline} vs {other}): WARNING - mismatch of {difference} boxes.");
-    }
-}
-
-static string DescribeModelSource(LayoutRuntime runtime)
-    => runtime switch
-    {
-        LayoutRuntime.Onnx => LayoutSdkBundledModels.GetOptimizedOnnxPath(),
-        LayoutRuntime.Ort => LayoutSdkBundledModels.GetOptimizedRuntimeOrtPath(),
-        LayoutRuntime.OpenVino => $"{LayoutSdkBundledModels.GetOpenVinoXmlPath()} (+ {LayoutSdkBundledModels.GetOpenVinoBinPath()})",
-        _ => "Unknown runtime"
-    };
+Console.WriteLine($"Detected {result.Boxes.Count} layout elements.");
+Console.WriteLine($"Preprocess ms: {result.Metrics.PreprocessDuration.TotalMilliseconds:F2}");
+Console.WriteLine($"Inference ms: {result.Metrics.InferenceDuration.TotalMilliseconds:F2}");
+Console.WriteLine($"Total ms: {result.Metrics.TotalDuration.TotalMilliseconds:F2}");
 
 static string PrepareInputImage(string? sourceImage)
 {
