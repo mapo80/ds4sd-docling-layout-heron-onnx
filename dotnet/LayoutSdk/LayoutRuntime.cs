@@ -2,6 +2,6 @@ namespace LayoutSdk;
 
 public enum LayoutRuntime
 {
-    Onnx
+    Onnx = 0,
+    Ort = Onnx
 }
-

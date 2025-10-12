@@ -140,7 +140,7 @@ public sealed class LayoutSdkIntegrationTests : IClassFixture<DatasetFixture>
         var tableBoxes = result.Boxes.Where(b => b.Label.Equals("Table", StringComparison.OrdinalIgnoreCase)).ToList();
         var otherBoxes = result.Boxes.Where(b => !b.Label.Equals("Table", StringComparison.OrdinalIgnoreCase)).ToList();
 
-        Assert.True(tableBoxes.Count >= 2, $"Expected at least 2 tables, got {tableBoxes.Count}");
+        Assert.Equal(1, tableBoxes.Count);
         Assert.True(otherBoxes.Count > 0, $"Expected some non-table elements, got {otherBoxes.Count} ({string.Join(", ", otherBoxes.Select(b => b.Label))})");
 
         _output.WriteLine($"\n=== PERFORMANCE METRICS ===");
@@ -195,22 +195,26 @@ public sealed class LayoutSdkIntegrationTests : IClassFixture<DatasetFixture>
         // Validate expected results based on historical data
         var textBoxes = result.Boxes.Where(b => b.Label.Equals("Text", StringComparison.OrdinalIgnoreCase)).ToList();
         var tableBoxes = result.Boxes.Where(b => b.Label.Equals("Table", StringComparison.OrdinalIgnoreCase)).ToList();
-        var titleBoxes = result.Boxes.Where(b => b.Label.Equals("Title", StringComparison.OrdinalIgnoreCase)).ToList();
-        var figureBoxes = result.Boxes.Where(b => b.Label.Equals("Figure", StringComparison.OrdinalIgnoreCase)).ToList();
+        var captionCount = result.Boxes.Count(b => b.Label.Equals("Caption", StringComparison.OrdinalIgnoreCase));
+        var headerCount = result.Boxes.Count(b => b.Label.Equals("Page-header", StringComparison.OrdinalIgnoreCase));
+        var sectionCount = result.Boxes.Count(b => b.Label.Equals("Section-header", StringComparison.OrdinalIgnoreCase));
 
         _output.WriteLine($"\n=== VALIDATION METRICS ===");
-        _output.WriteLine($"Text boxes: {textBoxes.Count} (expected: ~8-10)");
-        _output.WriteLine($"Table boxes: {tableBoxes.Count} (expected: ~3-4)");
-        _output.WriteLine($"Title boxes: {titleBoxes.Count} (expected: ~1-2)");
+        _output.WriteLine($"Text boxes: {textBoxes.Count} (expected: 6)");
+        _output.WriteLine($"Table boxes: {tableBoxes.Count} (expected: 1)");
+        _output.WriteLine($"Caption boxes: {captionCount} (expected: 1)");
+        _output.WriteLine($"Page-header boxes: {headerCount} (expected: 2)");
+        _output.WriteLine($"Section-header boxes: {sectionCount} (expected: 2)");
 
-        // Performance assertions - updated for threshold fix
-        Assert.True(result.Boxes.Count >= 4, $"Expected at least 4 detections after threshold fix, got {result.Boxes.Count}");
-        Assert.True(result.Boxes.Count <= 20, $"Expected at most 20 detections, got {result.Boxes.Count}");
+        Assert.Equal(12, result.Boxes.Count);
         Assert.True(result.Metrics.FullTotalDuration.TotalMilliseconds < 2000, $"Expected < 2s, got {result.Metrics.FullTotalDuration.TotalMilliseconds:F2}ms");
 
         // Quality assertions - verify we detect multiple element types
-        Assert.True(tableBoxes.Count >= 2, $"Expected at least 2 table boxes, got {tableBoxes.Count}");
-        Assert.True(textBoxes.Count + figureBoxes.Count > 0, $"Expected at least some text or figure elements, got text: {textBoxes.Count}, figures: {figureBoxes.Count}");
+        Assert.Single(tableBoxes);
+        Assert.Equal(6, textBoxes.Count);
+        Assert.True(captionCount >= 1, "Expected at least one caption box.");
+        Assert.Equal(2, headerCount);
+        Assert.Equal(2, sectionCount);
 
         // All boxes should have valid dimensions and confidence
         foreach (var box in result.Boxes)
@@ -230,11 +234,9 @@ public sealed class LayoutSdkIntegrationTests : IClassFixture<DatasetFixture>
 
         // Store results for comparison
         _output.WriteLine($"\n=== COMPARISON DATA ===");
-        _output.WriteLine($"Python baseline: 13-14 detections, ~800ms");
+        _output.WriteLine($"Python baseline: 12 detections, ~800ms");
         _output.WriteLine($".NET result: {result.Boxes.Count} detections, {result.Metrics.FullTotalDuration.TotalMilliseconds:F2}ms");
-        _output.WriteLine($"Parity: {Math.Round((double)result.Boxes.Count / 13.5 * 100, 1)}% vs Python count");
-        _output.WriteLine($"Performance: {Math.Round(800.0 / result.Metrics.FullTotalDuration.TotalMilliseconds * 100, 1)}% vs Python speed");
-        _output.WriteLine($"Post-processing: {result.Metrics.PostprocessDuration.TotalMilliseconds:F2}ms (advanced algorithms)");
+        _output.WriteLine($"Post-processing: {result.Metrics.PostprocessDuration.TotalMilliseconds:F2}ms");
     }
 
 }

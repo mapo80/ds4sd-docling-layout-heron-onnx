@@ -1,5 +1,4 @@
 using LayoutSdk.Inference;
-using LayoutSdk.Metrics;
 using LayoutSdk.Processing;
 using SkiaSharp;
 using System;
@@ -19,7 +18,16 @@ public class LayoutPipelineTests
         public LayoutBackendResult Infer(ImageTensor tensor)
         {
             Called = true;
-            return new LayoutBackendResult(new List<BoundingBox> { new(0, 0, 1, 1, "box") });
+            var logits = new float[17];
+            Array.Fill(logits, -10f);
+            logits[9] = 5f; // Favor the "Text" class.
+
+            var boxes = new[] { 0.5f, 0.5f, 0.5f, 0.5f };
+            return new LayoutBackendResult(
+                logits,
+                new[] { 1, 1, logits.Length },
+                boxes,
+                new[] { 1, 1, 4 });
         }
 
         public void Dispose()
@@ -42,7 +50,10 @@ public class LayoutPipelineTests
     [Fact]
     public void Execute_NullImage_Throws()
     {
-        var pipeline = new LayoutPipeline(new RecordingBackend(), new RecordingPreprocessor());
+        var pipeline = new LayoutPipeline(
+            new RecordingBackend(),
+            new RecordingPreprocessor(),
+            new LayoutPostprocessor(LayoutPostprocessOptions.CreateDefault()));
         Assert.Throws<ArgumentNullException>(() => pipeline.Execute(null!));
     }
 
@@ -52,7 +63,10 @@ public class LayoutPipelineTests
         using var image = new SKBitmap(2, 2);
         var backend = new RecordingBackend();
         var preprocessor = new RecordingPreprocessor();
-        var pipeline = new LayoutPipeline(backend, preprocessor);
+        var pipeline = new LayoutPipeline(
+            backend,
+            preprocessor,
+            new LayoutPostprocessor(LayoutPostprocessOptions.CreateDefault()));
 
         var result = pipeline.Execute(image);
         Assert.True(preprocessor.Called);
@@ -68,7 +82,10 @@ public class LayoutPipelineTests
     public void Dispose_DisposesBackendOnce()
     {
         var backend = new RecordingBackend();
-        var pipeline = new LayoutPipeline(backend, new RecordingPreprocessor());
+        var pipeline = new LayoutPipeline(
+            backend,
+            new RecordingPreprocessor(),
+            new LayoutPostprocessor(LayoutPostprocessOptions.CreateDefault()));
         pipeline.Dispose();
         pipeline.Dispose();
         Assert.True(backend.Disposed);

@@ -38,7 +38,14 @@ public sealed class LayoutSdk : IDisposable
         using var bitmap = SKBitmap.Decode(imagePath)
                            ?? throw new InvalidOperationException(LayoutDefaults.ImageDecodeFailureMessage);
 
-        var pipeline = _pipelines.GetOrAdd(runtime, r => new LayoutPipeline(_backendFactory.Create(r), _preprocessor));
+        var pipeline = _pipelines.GetOrAdd(
+            runtime,
+            r =>
+            {
+                var backend = _backendFactory.Create(r);
+                var postprocessor = new LayoutPostprocessor(LayoutPostprocessOptions.CreateDefault());
+                return new LayoutPipeline(backend, _preprocessor, postprocessor);
+            });
         var pipelineResult = pipeline.Execute(bitmap);
 
         var overlayDuration = TimeSpan.Zero;

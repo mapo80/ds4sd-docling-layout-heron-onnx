@@ -8,10 +8,8 @@ namespace LayoutSdk.Tests;
 public class OnnxRuntimeBackendTests
 {
    [Fact]
-   public void Infer_ThrowsNotSupportedException()
+   public void Constructor_InvalidModel_Throws()
    {
-       var backend = new OnnxRuntimeBackend("missing.onnx");
-       using var tensor = ImageTensor.Rent(2, 2, 4);
-       Assert.Throws<Microsoft.ML.OnnxRuntime.OnnxRuntimeException>(() => backend.Infer(tensor));
+       Assert.Throws<Microsoft.ML.OnnxRuntime.OnnxRuntimeException>(() => new OnnxRuntimeBackend("missing.onnx"));
    }
 }

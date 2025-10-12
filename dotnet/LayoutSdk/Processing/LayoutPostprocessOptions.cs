@@ -8,6 +8,27 @@ namespace LayoutSdk.Processing;
 /// </summary>
 public sealed class LayoutPostprocessOptions
 {
+    private static readonly string[] DefaultLabels =
+    {
+        "Caption",
+        "Footnote",
+        "Formula",
+        "List-item",
+        "Page-footer",
+        "Page-header",
+        "Picture",
+        "Section-header",
+        "Table",
+        "Text",
+        "Title",
+        "Document Index",
+        "Code",
+        "Checkbox-Selected",
+        "Checkbox-Unselected",
+        "Form",
+        "Key-Value Region"
+    };
+
     /// <summary>
     /// Threshold for Union-Find merge operations (IoU).
     /// </summary>
@@ -26,26 +47,22 @@ public sealed class LayoutPostprocessOptions
     /// <summary>
     /// Label-specific confidence thresholds.
     /// </summary>
-    public Dictionary<string, float> LabelThresholds { get; set; } = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["Caption"] = 0.5f,
-        ["Footnote"] = 0.5f,
-        ["Formula"] = 0.5f,
-        ["List-item"] = 0.5f,
-        ["Page-footer"] = 0.5f,
-        ["Page-header"] = 0.5f,
-        ["Picture"] = 0.5f,
-        ["Section-header"] = 0.4f,
-        ["Table"] = 0.45f,
-        ["Text"] = 0.45f,
-        ["Title"] = 0.4f,
-        ["Code"] = 0.4f,
-        ["Checkbox-Selected"] = 0.4f,
-        ["Checkbox-Unselected"] = 0.4f,
-        ["Form"] = 0.4f,
-        ["Key-Value Region"] = 0.4f,
-        ["Document Index"] = 0.4f
-    };
+    public Dictionary<string, float> LabelThresholds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    internal float GetThreshold(string label) =>
+        LabelThresholds.TryGetValue(label, out var threshold)
+            ? threshold
+            : DefaultThreshold;
+
+    /// <summary>
+    /// Indicates whether the model was trained with focal loss (RT-DETR models use focal loss).
+    /// </summary>
+    public bool UseFocalLoss { get; set; } = true;
+
+    /// <summary>
+    /// Label map matching the RT-DETR <c>id2label</c> metadata.
+    /// </summary>
+    public IReadOnlyList<string> Labels { get; set; } = DefaultLabels;
 
     /// <summary>
     /// Default size constraints for boxes.
@@ -117,6 +134,7 @@ public sealed class LayoutPostprocessOptions
             UnionFindMergeThreshold = 0.3f,
             MaxRelativeDistance = 0.5f,
             DefaultThreshold = 0.25f,  // Match Python threshold=0.25
+            Labels = DefaultLabels,
             SpatialIndexCellSize = 50f,
             SpatialContextRadius = 100f,
             RelationshipAnalysisRadius = 150f,
@@ -137,6 +155,7 @@ public sealed class LayoutPostprocessOptions
             UnionFindMergeThreshold = 0.1f,  // Lower threshold for more merging
             MaxRelativeDistance = 0.3f,      // Closer distance for merging
             DefaultThreshold = 0.5f,         // Higher confidence threshold
+            Labels = DefaultLabels,
             SpatialIndexCellSize = 25f,       // Smaller cells for precision
             SpatialContextRadius = 75f,       // Smaller context radius
             RelationshipAnalysisRadius = 100f,
@@ -157,6 +176,7 @@ public sealed class LayoutPostprocessOptions
             UnionFindMergeThreshold = 0.5f,   // Higher threshold for less merging
             MaxRelativeDistance = 0.8f,       // Larger distance for merging
             DefaultThreshold = 0.2f,          // Lower confidence threshold
+            Labels = DefaultLabels,
             SpatialIndexCellSize = 100f,      // Larger cells for performance
             SpatialContextRadius = 150f,      // Larger context radius
             RelationshipAnalysisRadius = 200f,

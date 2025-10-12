@@ -7,10 +7,8 @@ namespace LayoutSdk.Tests;
 public class OpenVinoBackendTests
 {
    [Fact]
-   public void Infer_ThrowsNotSupportedException()
+   public void Constructor_ThrowsNotSupportedException()
    {
-       var backend = new OpenVinoBackend("missing.xml", "missing.bin");
-       using var tensor = ImageTensor.Rent(1, 1, 1);
-       Assert.Throws<NotSupportedException>(() => backend.Infer(tensor));
+       Assert.Throws<NotSupportedException>(() => new OpenVinoBackend("missing.xml", "missing.bin"));
    }
 }

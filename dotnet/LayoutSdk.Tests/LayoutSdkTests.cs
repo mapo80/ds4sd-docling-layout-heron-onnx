@@ -1,21 +1,29 @@
 using LayoutSdk;
 using LayoutSdk.Configuration;
 using LayoutSdk.Factories;
+using LayoutSdk.Inference;
+using LayoutSdk.Processing;
 using System;
-using System.Collections.Generic;
 using System.IO;
 using Xunit;
-using LayoutSdk.Inference;
-using LayoutSdk.Metrics;
-using LayoutSdk.Processing;
-using SkiaSharp;
 
 namespace LayoutSdk.Tests;
 
 file class FakeBackend : ILayoutBackend
 {
-    public LayoutBackendResult Infer(ImageTensor tensor) =>
-        new(new List<BoundingBox> { new(1, 1, 2, 2, "box") });
+    public LayoutBackendResult Infer(ImageTensor tensor)
+    {
+        var logits = new float[17];
+        Array.Fill(logits, -10f);
+        logits[9] = 5f; // "Text"
+
+        var boxes = new[] { 0.5f, 0.5f, 1f, 1f };
+        return new LayoutBackendResult(
+            logits,
+            new[] { 1, 1, logits.Length },
+            boxes,
+            new[] { 1, 1, 4 });
+    }
 }
 
 file class FakeBackendFactory : ILayoutBackendFactory
@@ -29,8 +37,17 @@ file sealed class DisposableBackend : ILayoutBackend, IDisposable
 {
     public bool Disposed { get; private set; }
 
-    public LayoutBackendResult Infer(ImageTensor tensor) =>
-        new(new List<BoundingBox>());
+    public LayoutBackendResult Infer(ImageTensor tensor)
+    {
+        var logits = new float[17];
+        Array.Fill(logits, -10f);
+        var boxes = new[] { 0.5f, 0.5f, 0.5f, 0.5f };
+        return new LayoutBackendResult(
+            logits,
+            new[] { 1, 1, logits.Length },
+            boxes,
+            new[] { 1, 1, 4 });
+    }
 
     public void Dispose() => Disposed = true;
 }

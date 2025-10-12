@@ -1,12 +1,11 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
+using LayoutSdk.Inference;
 
 namespace LayoutSdk.Processing;
 
 /// <summary>
-/// Advanced layout post-processor that aligns .NET implementation with Python Docling LayoutPostprocessor.
-/// Implements Union-Find merge, spatial indexing, and sophisticated label-specific filtering.
+/// Mirrors the HuggingFace <c>RTDetrImageProcessor.post_process_object_detection</c> implementation.
 /// </summary>
 public sealed class LayoutPostprocessor
 {
@@ -15,86 +14,284 @@ public sealed class LayoutPostprocessor
     public LayoutPostprocessor(LayoutPostprocessOptions options)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        if (_options.Labels == null || _options.Labels.Count == 0)
+        {
+            throw new ArgumentException("At least one label must be configured.", nameof(options));
+        }
     }
 
     /// <summary>
-    /// Post-processes raw layout detections to match Python HuggingFace behavior exactly.
-    /// Applies the same logic as processor.post_process_object_detection.
+    /// Converts raw model outputs into absolute bounding boxes aligned with HuggingFace's Python pipeline.
     /// </summary>
-    /// <param name="rawBoxes">Raw bounding boxes from layout detection</param>
-    /// <returns>Post-processed bounding boxes</returns>
-    public static IReadOnlyList<BoundingBox> Postprocess(IReadOnlyList<BoundingBox> rawBoxes)
+    /// <param name="backendResult">Raw logits and box predictions from the inference backend.</param>
+    /// <param name="targetHeight">Original image height (in pixels).</param>
+    /// <param name="targetWidth">Original image width (in pixels).</param>
+    public IReadOnlyList<BoundingBox> Postprocess(LayoutBackendResult backendResult, int targetHeight, int targetWidth)
     {
-        if (rawBoxes == null || rawBoxes.Count == 0)
+        ArgumentNullException.ThrowIfNull(backendResult);
+
+        if (targetHeight <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(targetHeight));
+        }
+
+        if (targetWidth <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(targetWidth));
+        }
+
+        var logitsShape = backendResult.LogitsShape;
+        var boxesShape = backendResult.PredictedBoxesShape;
+
+        if (logitsShape[0] != boxesShape[0])
+        {
+            throw new InvalidOperationException("Logits and boxes batch dimensions must match.");
+        }
+
+        var batchSize = logitsShape[0];
+        if (batchSize != 1)
+        {
+            throw new NotSupportedException("Only batch size 1 is supported in the current pipeline.");
+        }
+
+        var numQueries = logitsShape[1];
+        var numClasses = logitsShape[2];
+        if (boxesShape[1] != numQueries || boxesShape[2] != 4)
+        {
+            throw new InvalidOperationException("Box tensor shape must be [batch, queries, 4].");
+        }
+
+        var normalizedBoxes = ConvertToCornerCoordinates(
+            backendResult.PredictedBoxes,
+            boxesShape,
+            batchIndex: 0);
+
+        var candidates = _options.UseFocalLoss
+            ? SelectWithFocalLoss(backendResult.Logits, logitsShape, batchIndex: 0)
+            : SelectWithSoftmax(backendResult.Logits, logitsShape, batchIndex: 0);
+
+        if (candidates.Count == 0)
         {
             return Array.Empty<BoundingBox>();
         }
 
-        // Step 1: Filter out low confidence detections (threshold=0.25, same as Python)
-        var filteredBoxes = rawBoxes.Where(box => box.Confidence >= 0.25f).ToList();
-
-        // Step 2: Sort by confidence (highest first, same as Python)
-        var sortedBoxes = filteredBoxes.OrderByDescending(box => box.Confidence).ToList();
-
-        // Step 3: Apply Non-Maximum Suppression (NMS) with IoU threshold 0.7
-        // This matches the HuggingFace post-processing behavior
-        return ApplyNMS(sortedBoxes, iouThreshold: 0.7f);
-    }
-
-    private static IReadOnlyList<BoundingBox> ApplyNMS(IReadOnlyList<BoundingBox> boxes, float iouThreshold)
-    {
-        if (boxes.Count == 0)
+        var results = new List<BoundingBox>(candidates.Count);
+        foreach (var candidate in candidates)
         {
-            return Array.Empty<BoundingBox>();
+            if (candidate.QueryIndex < 0 || candidate.QueryIndex >= numQueries)
+            {
+                continue;
+            }
+
+            if (candidate.ClassIndex < 0)
+            {
+                continue;
+            }
+
+            var label = ResolveLabel(candidate.ClassIndex);
+            var threshold = _options.GetThreshold(label);
+            if (!(candidate.Score > threshold))
+            {
+                continue;
+            }
+
+            var baseIndex = candidate.QueryIndex * 4;
+            var x0 = Math.Clamp(normalizedBoxes[baseIndex + 0] * targetWidth, 0f, targetWidth);
+            var y0 = Math.Clamp(normalizedBoxes[baseIndex + 1] * targetHeight, 0f, targetHeight);
+            var x1 = Math.Clamp(normalizedBoxes[baseIndex + 2] * targetWidth, 0f, targetWidth);
+            var y1 = Math.Clamp(normalizedBoxes[baseIndex + 3] * targetHeight, 0f, targetHeight);
+
+            var width = x1 - x0;
+            var height = y1 - y0;
+            if (width <= 0f || height <= 0f)
+            {
+                continue;
+            }
+
+            results.Add(new BoundingBox(
+                (float)x0,
+                (float)y0,
+                (float)width,
+                (float)height,
+                label,
+                candidate.Score));
         }
 
-        var result = new List<BoundingBox>();
-        var remaining = boxes.ToList();
+        return results;
+    }
 
-        while (remaining.Count > 0)
+    private IReadOnlyList<DetectionCandidate> SelectWithFocalLoss(
+        float[] logits,
+        int[] logitsShape,
+        int batchIndex)
+    {
+        var numQueries = logitsShape[1];
+        var numClasses = logitsShape[2];
+        var totalEntries = numQueries * numClasses;
+
+        var entries = new DetectionCandidate[totalEntries];
+        var batchOffset = batchIndex * totalEntries;
+
+        for (var query = 0; query < numQueries; query++)
         {
-            // Take the box with highest confidence
-            var bestBox = remaining.OrderByDescending(b => b.Confidence).First();
-            result.Add(bestBox);
-            remaining.Remove(bestBox);
-
-            // Remove boxes that overlap significantly with the best box
-            remaining.RemoveAll(box =>
-                string.Equals(box.Label, bestBox.Label, StringComparison.OrdinalIgnoreCase) &&
-                ComputeIoU(box, bestBox) > iouThreshold);
+            for (var cls = 0; cls < numClasses; cls++)
+            {
+                var flatIndex = query * numClasses + cls;
+                var logitIndex = batchOffset + flatIndex;
+                var score = Sigmoid(logits[logitIndex]);
+                entries[flatIndex] = new DetectionCandidate(score, query, cls, flatIndex);
+            }
         }
 
-        return result;
+        Array.Sort(entries, static (a, b) =>
+        {
+            var byScore = b.Score.CompareTo(a.Score);
+            return byScore != 0 ? byScore : a.FlattenedIndex.CompareTo(b.FlattenedIndex);
+        });
+
+        var take = Math.Min(numQueries, entries.Length);
+        if (take == entries.Length)
+        {
+            return entries;
+        }
+
+        var subset = new DetectionCandidate[take];
+        Array.Copy(entries, subset, take);
+        return subset;
     }
 
-    private static float ComputeIoU(BoundingBox box1, BoundingBox box2)
+    private IReadOnlyList<DetectionCandidate> SelectWithSoftmax(
+        float[] logits,
+        int[] logitsShape,
+        int batchIndex)
     {
-        var ax1 = box1.X;
-        var ay1 = box1.Y;
-        var ax2 = box1.X + box1.Width;
-        var ay2 = box1.Y + box1.Height;
+        var numQueries = logitsShape[1];
+        var numClasses = logitsShape[2];
+        var entries = new DetectionCandidate[numQueries];
+        var batchOffset = batchIndex * numQueries * numClasses;
 
-        var bx1 = box2.X;
-        var by1 = box2.Y;
-        var bx2 = box2.X + box2.Width;
-        var by2 = box2.Y + box2.Height;
+        for (var query = 0; query < numQueries; query++)
+        {
+            var rowOffset = batchOffset + query * numClasses;
+            var probabilities = ComputeSoftmax(logits, rowOffset, numClasses);
 
-        var interLeft = Math.Max(ax1, bx1);
-        var interTop = Math.Max(ay1, by1);
-        var interRight = Math.Min(ax2, bx2);
-        var interBottom = Math.Min(ay2, by2);
+            var bestClass = 0;
+            var bestScore = probabilities[0];
+            // In non-focal mode the last class is the "no-object" class.
+            var limit = numClasses - 1;
+            for (var cls = 1; cls < limit; cls++)
+            {
+                var score = probabilities[cls];
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestClass = cls;
+                }
+            }
 
-        var interWidth = Math.Max(0f, interRight - interLeft);
-        var interHeight = Math.Max(0f, interBottom - interTop);
-        var interArea = interWidth * interHeight;
+            entries[query] = new DetectionCandidate(
+                bestScore,
+                query,
+                bestClass,
+                query * limit + bestClass);
+        }
 
-        var areaA = Math.Max(0f, box1.Width) * Math.Max(0f, box1.Height);
-        var areaB = Math.Max(0f, box2.Width) * Math.Max(0f, box2.Height);
-        var union = areaA + areaB - interArea;
-
-        return union <= 0f ? 0f : interArea / union;
+        return entries;
     }
 
+    private static float[] ConvertToCornerCoordinates(float[] boxes, int[] shape, int batchIndex)
+    {
+        var numQueries = shape[1];
+        var stride = shape[2];
 
+        var corners = new float[numQueries * stride];
+        var batchOffset = batchIndex * numQueries * stride;
 
+        for (var query = 0; query < numQueries; query++)
+        {
+            var sourceIndex = batchOffset + query * stride;
+            var destinationIndex = query * stride;
+
+            var cx = boxes[sourceIndex + 0];
+            var cy = boxes[sourceIndex + 1];
+            var width = boxes[sourceIndex + 2];
+            var height = boxes[sourceIndex + 3];
+
+            corners[destinationIndex + 0] = cx - (width / 2f);
+            corners[destinationIndex + 1] = cy - (height / 2f);
+            corners[destinationIndex + 2] = cx + (width / 2f);
+            corners[destinationIndex + 3] = cy + (height / 2f);
+        }
+
+        return corners;
+    }
+
+    private string ResolveLabel(int classIndex)
+    {
+        if (classIndex >= 0 && classIndex < _options.Labels.Count)
+        {
+            return _options.Labels[classIndex];
+        }
+
+        return $"Label-{classIndex}";
+    }
+
+    private static float Sigmoid(float value)
+    {
+        var neg = -value;
+        return 1f / (1f + MathF.Exp(neg));
+    }
+
+    private static float[] ComputeSoftmax(float[] logits, int offset, int length)
+    {
+        var slice = new float[length];
+        var max = float.NegativeInfinity;
+        for (var i = 0; i < length; i++)
+        {
+            var value = logits[offset + i];
+            slice[i] = value;
+            if (value > max)
+            {
+                max = value;
+            }
+        }
+
+        var sum = 0f;
+        for (var i = 0; i < length; i++)
+        {
+            slice[i] = MathF.Exp(slice[i] - max);
+            sum += slice[i];
+        }
+
+        if (sum == 0f)
+        {
+            return slice;
+        }
+
+        for (var i = 0; i < length; i++)
+        {
+            slice[i] /= sum;
+        }
+
+        return slice;
+    }
+
+    private readonly struct DetectionCandidate
+    {
+        public DetectionCandidate(float score, int queryIndex, int classIndex, int flattenedIndex)
+        {
+            Score = score;
+            QueryIndex = queryIndex;
+            ClassIndex = classIndex;
+            FlattenedIndex = flattenedIndex;
+        }
+
+        public float Score { get; }
+
+        public int QueryIndex { get; }
+
+        public int ClassIndex { get; }
+
+        public int FlattenedIndex { get; }
+    }
 }

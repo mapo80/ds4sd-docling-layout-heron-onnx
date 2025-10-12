@@ -1,3 +1,4 @@
+using System;
 using LayoutSdk;
 using LayoutSdk.Configuration;
 using LayoutSdk.Factories;
@@ -19,7 +20,17 @@ public class LayoutBackendFactoryTests
     {
         public bool Disposed { get; private set; }
 
-        public LayoutBackendResult Infer(ImageTensor tensor) => new(new System.Collections.Generic.List<BoundingBox>());
+        public LayoutBackendResult Infer(ImageTensor tensor)
+        {
+            var logits = new float[17];
+            Array.Fill(logits, -10f);
+            var boxes = new[] { 0.5f, 0.5f, 0.5f, 0.5f };
+            return new LayoutBackendResult(
+                logits,
+                new[] { 1, 1, logits.Length },
+                boxes,
+                new[] { 1, 1, 4 });
+        }
 
         public void Dispose()
         {
