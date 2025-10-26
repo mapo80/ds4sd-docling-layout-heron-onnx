@@ -8,6 +8,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using LayoutSdk.Configuration;
 
 namespace LayoutSdk.Assets;
 
@@ -47,6 +48,13 @@ public static class LayoutModelDownloader
                 FileName: "heron-optimized.with_runtime_opt.ort",
                 ReleaseName: "heron-optimized.with_runtime_opt.ort",
                 Md5: "4f95929544d98c76a0c99674627f716e"),
+        };
+
+    private static readonly IReadOnlyDictionary<LayoutModelVariant, ReleaseAsset> VariantAssets =
+        new Dictionary<LayoutModelVariant, ReleaseAsset>
+        {
+            [LayoutModelVariant.Accurate] = Assets["heron-optimized.onnx"],
+            [LayoutModelVariant.Fast] = Assets["heron-optimized-fp16.onnx"]
         };
 
     private static readonly HttpClient Http;
@@ -124,6 +132,26 @@ public static class LayoutModelDownloader
     }
 
     /// <summary>
+    /// Ensure that the ONNX file corresponding to the selected <see cref="Configuration.LayoutModelVariant"/> exists locally.
+    /// </summary>
+    public static Task EnsureVariantAsync(
+        LayoutModelVariant variant,
+        string destinationDirectory,
+        GithubReleaseOptions? options = null,
+        Action<string>? logger = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (!VariantAssets.TryGetValue(variant, out var asset))
+        {
+            throw new NotSupportedException($"Variant {variant} is not supported.");
+        }
+
+        Directory.CreateDirectory(destinationDirectory);
+        var path = Path.Combine(destinationDirectory, asset.FileName);
+        return EnsureModelAsync(path, options, logger, cancellationToken);
+    }
+
+    /// <summary>
     /// Synchronous wrapper around <see cref="EnsureModelAsync"/>.
     /// </summary>
     public static void EnsureModel(
@@ -133,6 +161,19 @@ public static class LayoutModelDownloader
         CancellationToken cancellationToken = default)
     {
         EnsureModelAsync(modelPath, options, logger, cancellationToken).GetAwaiter().GetResult();
+    }
+
+    /// <summary>
+    /// Synchronous wrapper around <see cref="EnsureVariantAsync"/>.
+    /// </summary>
+    public static void EnsureVariant(
+        LayoutModelVariant variant,
+        string destinationDirectory,
+        GithubReleaseOptions? options = null,
+        Action<string>? logger = null,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureVariantAsync(variant, destinationDirectory, options, logger, cancellationToken).GetAwaiter().GetResult();
     }
 
     private static bool VerifyChecksum(string path, string expectedMd5)

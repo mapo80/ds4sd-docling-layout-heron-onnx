@@ -34,7 +34,8 @@ public static class LayoutSdkBundledModels
         => new(
             onnxModelPath: GetOptimizedOnnxPath(),
             defaultLanguage: defaultLanguage,
-            validateModelPaths: validateModelPaths);
+            validateModelPaths: validateModelPaths,
+            modelVariant: LayoutModelVariant.Accurate);
 
     public static void EnsureAllFilesExist(
         Action<string>? logger = null,

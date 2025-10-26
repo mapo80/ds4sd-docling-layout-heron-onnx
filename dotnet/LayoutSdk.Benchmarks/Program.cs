@@ -52,12 +52,20 @@ if (images.Count == 0)
     images.Add(tmp);
 }
 
-var onnxModelPath = parameters.GetValueOrDefault("--onnx-model", "models/heron-optimized.onnx");
+var modelVariant = variant.Equals("fast", StringComparison.OrdinalIgnoreCase)
+    ? LayoutModelVariant.Fast
+    : LayoutModelVariant.Accurate;
 
-var options = new LayoutSdkOptions(
-    onnxModelPath,
-    defaultLanguage: DocumentLanguage.English,
-    validateModelPaths: parameters.ContainsKey("--validate-models"));
+var options = parameters.TryGetValue("--onnx-model", out var customModelPath)
+    ? new LayoutSdkOptions(
+        customModelPath,
+        defaultLanguage: DocumentLanguage.English,
+        validateModelPaths: parameters.ContainsKey("--validate-models"),
+        modelVariant: modelVariant)
+    : LayoutReleaseModels.CreateOptions(
+        variant: modelVariant,
+        defaultLanguage: DocumentLanguage.English,
+        validateModelPaths: parameters.ContainsKey("--validate-models"));
 
 var timestamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
 var runDirectory = Path.Combine(outputRoot, variant, $"run-{timestamp}");

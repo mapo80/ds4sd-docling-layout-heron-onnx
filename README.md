@@ -234,6 +234,23 @@ La libreria `LayoutSdk` è stata rifattorizzata con un'architettura modulare e p
 
 Questo design consente di estendere facilmente la libreria (ad esempio aggiungendo un nuovo backend o una pipeline GPU) e rende la base di codice pronta per scenari enterprise (telemetria, osservabilità, riuso delle risorse).
 
+### Download automatico dei modelli
+Per evitare di distribuire manualmente gli asset ONNX, l'SDK espone il gestore `LayoutReleaseModels`, che scarica i pesi direttamente dalla release GitHub `models-2025-09-19` al primo utilizzo. È sufficiente scegliere la variante desiderata tramite l'enum `LayoutModelVariant`:
+
+```csharp
+using LayoutSdk;
+using LayoutSdk.Configuration;
+
+var options = LayoutReleaseModels.CreateOptions(
+    variant: LayoutModelVariant.Fast,    // oppure LayoutModelVariant.Accurate
+    validateModelPaths: true);           // opzionale, verifica l'esistenza del file
+
+using var sdk = new LayoutSdk(options);
+var result = sdk.Process("pagina.png", overlay: false, LayoutRuntime.Onnx);
+```
+
+Di default i modelli vengono memorizzati in `%LOCALAPPDATA%/Docling/LayoutSdk/models` (Windows) oppure in `~/.config/Docling/LayoutSdk/models` / `~/.local/share` (Linux/macOS, a seconda della piattaforma). Imposta la variabile d'ambiente `LAYOUTSDK_MODELS_DIR` per personalizzare la cartella di download.
+
 ### Utilizzo
 ```csharp
 using LayoutSdk;

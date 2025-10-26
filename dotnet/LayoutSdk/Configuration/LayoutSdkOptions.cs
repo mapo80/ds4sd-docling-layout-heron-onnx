@@ -9,7 +9,9 @@ public sealed class LayoutSdkOptions
     public LayoutSdkOptions(
         string onnxModelPath,
         DocumentLanguage defaultLanguage = DocumentLanguage.English,
-        bool validateModelPaths = false)
+        bool validateModelPaths = false,
+        LayoutModelVariant? modelVariant = null,
+        GithubReleaseOptions? releaseOptions = null)
     {
         if (string.IsNullOrWhiteSpace(onnxModelPath))
         {
@@ -19,6 +21,8 @@ public sealed class LayoutSdkOptions
         OnnxModelPath = onnxModelPath;
         DefaultLanguage = defaultLanguage;
         ValidateModelPaths = validateModelPaths;
+        ModelVariant = modelVariant ?? InferVariant(onnxModelPath);
+        ReleaseOptions = releaseOptions ?? new GithubReleaseOptions();
     }
 
     public string OnnxModelPath { get; }
@@ -27,11 +31,15 @@ public sealed class LayoutSdkOptions
 
     public bool ValidateModelPaths { get; }
 
+    public LayoutModelVariant ModelVariant { get; }
+
+    public GithubReleaseOptions ReleaseOptions { get; }
+
     public bool EnableAdvancedNonMaxSuppression { get; set; } = true;
 
     public void EnsureModelPaths()
     {
-        LayoutModelDownloader.EnsureModel(OnnxModelPath);
+        LayoutModelDownloader.EnsureModel(OnnxModelPath, ReleaseOptions);
 
         if (!ValidateModelPaths)
         {
@@ -47,5 +55,16 @@ public sealed class LayoutSdkOptions
         {
             throw new FileNotFoundException($"Model file not found for {argumentName}", path);
         }
+    }
+
+    private static LayoutModelVariant InferVariant(string modelPath)
+    {
+        var fileName = Path.GetFileName(modelPath);
+        if (fileName.Equals(LayoutSdkBundledModels.OptimizedFp16OnnxFileName, StringComparison.OrdinalIgnoreCase))
+        {
+            return LayoutModelVariant.Fast;
+        }
+
+        return LayoutModelVariant.Accurate;
     }
 }
