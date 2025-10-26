@@ -7,8 +7,8 @@ using SkiaSharp;
 Console.WriteLine("Docling Layout SDK (NuGet package demo)");
 Console.WriteLine($"Models packaged under: {LayoutSdkBundledModels.ModelsRoot}");
 
-LayoutSdkBundledModels.EnsureAllFilesExist();
-Console.WriteLine("All bundled model files were found.");
+LayoutSdkBundledModels.EnsureAllFilesExist(Console.WriteLine);
+Console.WriteLine("All bundled model files are available.");
 
 var options = LayoutSdkBundledModels.CreateOptions(validateModelPaths: true);
 options.EnsureModelPaths();

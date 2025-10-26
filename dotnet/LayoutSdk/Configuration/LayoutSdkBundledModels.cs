@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
+using LayoutSdk.Assets;
 
 namespace LayoutSdk.Configuration;
 
@@ -34,14 +36,13 @@ public static class LayoutSdkBundledModels
             defaultLanguage: defaultLanguage,
             validateModelPaths: validateModelPaths);
 
-    public static void EnsureAllFilesExist()
+    public static void EnsureAllFilesExist(
+        Action<string>? logger = null,
+        CancellationToken cancellationToken = default)
     {
         foreach (var path in EnumerateExpectedFiles())
         {
-            if (!File.Exists(path))
-            {
-                throw new FileNotFoundException($"Bundled model file not found: {Path.GetFileName(path)}", path);
-            }
+            LayoutModelDownloader.EnsureModel(path, logger: logger, cancellationToken: cancellationToken);
         }
     }
 
